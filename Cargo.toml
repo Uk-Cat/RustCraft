@@ -1,0 +1,106 @@
+[package]
+name = "leafish"
+version = "0.1.0"
+authors = [ "Thinkofdeath <thinkofdeath@spigotmc.org>", "iceiix <ice_ix@protonmail.ch>", "terrarier2111" ]
+edition = "2018"
+resolver = "2"
+description = "Multi-protocol multi-platform Minecraft-compatible client"
+repository = "https://github.com/Lea-fish/Leafish"
+license = "MIT/Apache-2.0"
+
+[package.metadata.bundle]
+name = "Leafish"
+identifier = "com.github.Lea-fish.Leafish"
+icon = ["resources/icon*.png"]
+category = "Game"
+osx_minimum_system_version = "10.14"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+# Steven runs horrendously slow with no optimizations, and often freezes.
+# However, building with full -O3 optimizations takes too long for a debug build.
+# Use an -O1 optimization level strikes a good compromise between build and program performance.
+opt-level = 1
+
+# Lighter release-like profile used for the Windows cross-build, where the
+# build host has limited RAM (~4 GB) and the default `release` profile
+# (opt-level=3) causes rustc to be OOM-killed. opt-level=1 keeps peak
+# rustc memory usage low enough to fit, at the cost of some runtime
+# performance. Stripped to keep the .exe small for download.
+[profile.winrelease]
+inherits = "release"
+opt-level = 1
+debug = false
+strip = true
+codegen-units = 16
+lto = false
+
+# leafish_blocks is a 95k-line auto-generated crate. Compiling it at
+# opt-level>=1 makes rustc use too much RAM and gets OOM-killed on this
+# host (4 GB cgroup limit). Force opt-level=0 with maximum codegen-units
+# (256) so each codegen unit is small and peak memory stays low enough
+# to fit. The runtime cost is negligible because block registry lookups
+# are not hot-path code.
+[profile.release.package.leafish_blocks]
+opt-level = 0
+codegen-units = 256
+
+[dependencies]
+winit = { version = "0.29", features = ["rwh_05", "serde"] }
+raw-window-handle = "0.5.0"
+glow = "0.13"
+byteorder = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+flate2 = { version = "1.0", features = ["rust_backend"], default-features = false }
+zip = { version = "0.6", features = ["deflate"], default-features = false }
+image = "0.25"
+getrandom = { version = "0.2", features = ["js"] }
+rand = "0.8"
+rand_pcg = "0.3"
+base64 = "0.22"
+log = { version = "0.4", features = ["std"] }
+cgmath = "0.17"
+lazy_static = "1.4" # TODO: get rid of this and use OnceCell instead
+collision = "0.20"
+rsa_public_encrypt_pkcs1 = "0.4"
+structopt = "0.3"
+copypasta = "0.10"
+instant = "0.1"
+dirs = "5.0"
+
+# Concurrency features
+dashmap = "5.5"
+parking_lot = "0.12"
+atomic_float = "0.1.0"
+# arc-swap = "1.4.0" # TODO: Use this!
+crossbeam-channel = "0.5" # check if flume would be better in terms of performance!
+# flume = "0.10.8" # replaced by crossbeam channel
+# tokio = { version = "0.2", features = ["full"] } # readd as soon as we want to impl this!
+rayon = "1.5"
+rfd = "0.14"
+bevy_ecs = "0.13"
+
+reqwest = { version = "0.11", features = [ "blocking" ]}
+# glutin = "0.29"
+glutin = "0.31"
+glutin-winit = "0.4"
+
+arc-swap = "1.7.0"
+# phf = "0.11"
+
+[dependencies.leafish_resources]
+path = "./resources"
+version = "0"
+
+[dependencies.leafish_blocks]
+path = "./blocks"
+version = "0"
+
+[dependencies.leafish_shared]
+path = "./shared"
+version = "0"
+
+[dependencies.leafish_protocol]
+path = "./protocol"
+version = "0"
