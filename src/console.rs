@@ -135,6 +135,20 @@ impl Console {
         LOG_FILE_PATH.get()
     }
 
+    /// Force-flush the global log file. Cheap: just calls `sync_data()`
+    /// on the underlying `File` under the global mutex.
+    ///
+    /// This is used by diagnostic code that wants to guarantee a log
+    /// line is physically on disk before running a potentially-fatal
+    /// operation (e.g. before entering a packet handler that has
+    /// crashed before).
+    pub fn flush_logs() {
+        if let Some(global) = LOG_FILE.get() {
+            let f = global.lock();
+            let _ = f.sync_data();
+        }
+    }
+
     fn log_level_from_env(name: &str) -> Option<log::Level> {
         let variable_string = std::env::var(name).ok()?;
         log::Level::from_str(&variable_string).ok()
@@ -554,4 +568,37 @@ fn rfc3339_now() -> String {
     let days = now / 86400;
     // Good enough for log readability; not a real date lib but stable.
     format!("epoch+{}d {:02}:{:02}:{:02} (utc)", days, hours, mins, secs)
+}
+
+// ---------------------------------------------------------------------------
+// Module-level accessors for the global log file handle.
+//
+// These are used by the VEH (Vectored Exception Handler) in `veh.rs`,
+// which needs to write to the log file from inside an SEH exception
+// callback — WITHOUT going through the `ConsoleProxy` logger (because
+// the logger tries to acquire the Console mutex, which may be held by
+// the crashing thread, causing a deadlock).
+//
+// Both accessors are designed for use from exception-handler context:
+//   - `global_log_mutex()` returns the raw `&Mutex<File>` so the caller
+//     can use `try_lock()` to avoid blocking.
+//   - `log_file_path()` is already publicly exposed on `Console`,
+//     but we re-export it at module level for symmetry.
+// ---------------------------------------------------------------------------
+
+/// Returns a reference to the global log file mutex, if the Console
+/// has been initialised.
+///
+/// Used by the VEH handler to write crash diagnostics directly to the
+/// log file without going through the ConsoleProxy logger (which
+/// could deadlock if the crashing thread holds the Console mutex).
+pub fn global_log_mutex() -> Option<&'static Mutex<fs::File>> {
+    LOG_FILE.get()
+}
+
+/// Returns the absolute path of the active log file, if the Console
+/// has been initialised. Module-level re-export of
+/// `Console::log_file_path()` for symmetry with `global_log_mutex()`.
+pub fn log_file_path() -> Option<&'static PathBuf> {
+    LOG_FILE_PATH.get()
 }

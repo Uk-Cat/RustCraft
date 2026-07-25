@@ -104,3 +104,12 @@ version = "0"
 [dependencies.leafish_protocol]
 path = "./protocol"
 version = "0"
+
+# NOTE: src/veh.rs uses raw `extern "system"` FFI declarations instead
+# of the `windows-sys` crate. This avoids coupling our build to whatever
+# `windows-sys` version our transitive deps (winit, glutin, …) resolve
+# to — the windows-sys API surface has been reorganised several times
+# (EXCEPTION_RECORD moved between modules, AddVectoredExceptionHandler
+# disappeared from some feature combinations, etc.) and we don't want
+# to track that. The Windows ABI itself is stable, so direct FFI is
+# safe.

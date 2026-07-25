@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::ecs::{Manager, SystemExecStage};
+use crate::console;
 use crate::entity;
 use crate::entity::player::{create_local, MovementDelta, PlayerModel, PlayerMovement};
 use crate::entity::{EntityType, GameInfo, Gravity, MouseButtons, TargetPosition, TargetRotation};
@@ -612,6 +613,15 @@ impl Server {
                         "reader: dispatching handler for packet #{} ({})",
                         packet_count, pck_summary
                     );
+                    // Force-flush the log file BEFORE we enter the
+                    // dispatch. The Console logger already sync_data()s
+                    // on every write, but this is a belt-and-suspenders
+                    // guarantee that the line above is physically on
+                    // disk before we run code that has crashed before.
+                    // If the next line crashes via SEH (not Rust panic),
+                    // we want this line visible in the log file when
+                    // the user digs it up after the process vanishes.
+                    console::Console::flush_logs();
 
                         // Wrap the .map() call AND the entire handler
                         // dispatch in catch_unwind so that a panic in

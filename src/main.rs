@@ -78,6 +78,7 @@ pub mod screen;
 pub mod server;
 pub mod settings;
 pub mod ui;
+pub mod veh;
 pub mod world;
 
 use crate::entity::Rotation;
@@ -377,6 +378,16 @@ fn main() {
     log::set_boxed_logger(Box::new(proxy)).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
 
+    // Install the Windows Vectored Exception Handler (VEH) BEFORE any
+    // other code runs. The VEH catches SEH exceptions (stack overflow,
+    // access violation, etc.) that bypass Rust's panic hook entirely —
+    // without it, those exceptions kill the process with no forensic
+    // trail. VEH must be in place before we start spawning threads or
+    // doing network I/O, because that's where SEH exceptions happen.
+    // On non-Windows targets this is a no-op.
+    veh::init();
+    info!("VEH (Vectored Exception Handler) installed");
+
     // Surface the log file location up front so the user always knows
     // where to find it when dissecting a crash.
     if let Some(path) = console::Console::log_file_path() {
@@ -670,6 +681,21 @@ fn main() {
 
 const DEBUG: bool = false;
 
+/// Global tick counter so the VEH / panic hook can report how many
+/// main-thread ticks elapsed before the crash. This is critical for
+/// diagnosing "crash on join" bugs: if the tick count is non-zero
+/// when the VEH fires, we know the main thread was alive at least
+/// briefly after the network reader received the JoinGame packet,
+/// which tells us the crash is on a non-main thread.
+static MAIN_TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Returns the number of main-thread ticks that have elapsed since
+/// process startup. Used by the VEH to stamp the crash log with
+/// main-thread liveness info.
+pub fn main_tick_count() -> u64 {
+    MAIN_TICK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn tick_all(
     window: &winit::window::Window,
     game: &Game,
@@ -679,6 +705,15 @@ fn tick_all(
     last_resource_version: &mut usize,
     vsync: bool,
 ) {
+    let tick = MAIN_TICK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    // Log every 10th tick so we can see the main thread is alive
+    // during the JoinGame dispatch window. This is the smoking-gun
+    // diagnostic: if the VEH fires and tick count is < 10, the main
+    // thread barely ran before the crash — i.e. the crash is on a
+    // different thread (likely the network reader or a rayon worker).
+    if tick % 10 == 0 {
+        info!("main tick #{}", tick);
+    }
     let server = game.server.load();
     if let Some(server) = server.as_ref() {
         if !server.is_connected() {
