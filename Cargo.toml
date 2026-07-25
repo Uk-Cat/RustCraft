@@ -105,6 +105,42 @@ version = "0"
 path = "./protocol"
 version = "0"
 
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+#
+# `veh` — Windows Vectored Exception Handler for SEH crash diagnostics.
+# OFF by default. When enabled, the binary calls
+# `AddVectoredExceptionHandler` at startup to capture Windows SEH
+# exceptions (stack overflow, access violation, etc.) and write a
+# `crash-veh-<timestamp>.log` file with the exception code, address,
+# thread id, and backtrace.
+#
+# WHY THIS IS OFF BY DEFAULT
+# --------------------------
+# `AddVectoredExceptionHandler` + raw `extern "system"` FFI +
+# `SetThreadStackGuarantee` + reading `EXCEPTION_RECORD` fields via
+# pointer dereference is the exact code pattern that Windows
+# Defender's ML heuristics flag as "Trojan:Win32/Wacatac.B!ml" or
+# "HackTool:Win32/...". The VEH technique is legitimately used by
+# malware (anti-debugging, packers, code injection) and by debuggers
+# / crash reporters — Defender can't tell the difference, so it
+# flags any unsigned binary that does this.
+#
+# For the default portable .zip distribution we want the .exe to
+# run cleanly on a stock Windows install without Defender quarantine,
+# so VEH is OFF. Users who want SEH crash diagnostics (i.e. anyone
+# investigating the JoinGame crash) build with `--features veh` and
+# add a Defender exclusion for the resulting .exe themselves.
+#
+# The Rust panic hook in `console.rs` (which catches Rust panics,
+# including most `unwrap()` failures) is NOT feature-gated — it
+# uses only standard Rust APIs (`std::panic::set_hook`,
+# `Backtrace::force_capture`) and doesn't trigger Defender.
+[features]
+default = []
+veh = []
+
 # NOTE: src/veh.rs uses raw `extern "system"` FFI declarations instead
 # of the `windows-sys` crate. This avoids coupling our build to whatever
 # `windows-sys` version our transitive deps (winit, glutin, …) resolve

@@ -78,6 +78,7 @@ pub mod screen;
 pub mod server;
 pub mod settings;
 pub mod ui;
+#[cfg(feature = "veh")]
 pub mod veh;
 pub mod world;
 
@@ -385,8 +386,23 @@ fn main() {
     // trail. VEH must be in place before we start spawning threads or
     // doing network I/O, because that's where SEH exceptions happen.
     // On non-Windows targets this is a no-op.
-    veh::init();
-    info!("VEH (Vectored Exception Handler) installed");
+    //
+    // FEATURE-GATED: VEH is OFF by default because the
+    // `AddVectoredExceptionHandler` + raw `extern "system"` FFI
+    // pattern triggers Windows Defender's ML heuristics (flagged as
+    // Trojan:Win32/Wacatac.B!ml or HackTool:Win32/...). Build with
+    // `--features veh` to enable SEH crash diagnostics; the resulting
+    // .exe will need a Defender exclusion on the user's machine.
+    // See Cargo.toml `[features]` for the full rationale.
+    #[cfg(feature = "veh")]
+    {
+        veh::init();
+        info!("VEH (Vectored Exception Handler) installed");
+    }
+    #[cfg(not(feature = "veh"))]
+    {
+        info!("VEH disabled (build without --features veh to enable SEH crash diagnostics)");
+    }
 
     // Surface the log file location up front so the user always knows
     // where to find it when dissecting a crash.
