@@ -1,5 +1,5 @@
 [package]
-name = "leafish_blocks"
+name = "rustcraft_blocks"
 version = "0.0.1"
 authors = [ "Thinkofdeath <thinkofdeath@spigotmc.org>" ]
 edition = "2018"
@@ -11,6 +11,6 @@ collision = "0.20"
 parking_lot = "0.12"
 
 
-[dependencies.leafish_shared]
+[dependencies.rustcraft_shared]
 path = "../shared"
 version = "0"

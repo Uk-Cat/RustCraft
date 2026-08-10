@@ -5,13 +5,29 @@ use crate::ui;
 use crate::screen::{Screen, ScreenSystem};
 use crate::BoolSetting;
 use crate::FloatSetting;
+use crate::Game;
 use crate::IntSetting;
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub struct UIElements {
     background: ui::ImageRef,
     _buttons: Vec<ui::ButtonRef>,
     _sliders: Vec<ui::SliderRef>,
+}
+
+/// UI scale factor (sw) used to draw elements, matching the container mode set
+/// in main.rs. In Scaled mode it maps the logical window width onto the
+/// 854-space virtual screen; in Unscaled mode it is the fixed GUI scale.
+fn ui_scale(game: &Game, screen_width: f64) -> f64 {
+    if game.screen_sys.is_any_ingame() {
+        match game.settings.get_int(IntSetting::GuiScale) {
+            0 => 854.0 / screen_width,
+            scale => scale as f64 / 4.0,
+        }
+    } else {
+        854.0 / screen_width
+    }
 }
 
 pub struct SettingsMenu {
@@ -48,7 +64,7 @@ impl super::Screen for SettingsMenu {
         ui_container: &mut ui::Container,
     ) {
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(854.0, 480.0)
             .colour((0, 0, 0, 100))
@@ -152,6 +168,25 @@ impl super::Screen for SettingsMenu {
             });
         }
         buttons.push(skin_settings);
+
+        let redownload = ui::ButtonBuilder::new()
+            .position(0.0, 50.0)
+            .size(300.0, 40.0)
+            .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+            .create(ui_container);
+        {
+            let mut redownload = redownload.borrow_mut();
+            let txt = ui::TextBuilder::new()
+                .text("Redownload Textures")
+                .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+                .attach(&mut *redownload);
+            redownload.add_text(txt);
+            redownload.add_click_func(|_, game| {
+                game.resource_manager.write().redownload();
+                true
+            });
+        }
+        buttons.push(redownload);
 
         // Center bottom items
         let done_button = ui::ButtonBuilder::new()
@@ -279,7 +314,7 @@ impl super::Screen for VideoSettingsMenu {
         ui_container: &mut ui::Container,
     ) {
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(854.0, 480.0)
             .colour((0, 0, 0, 100))
@@ -290,7 +325,13 @@ impl super::Screen for VideoSettingsMenu {
         // Load defaults
         let r_max_fps = self.settings.get_int(IntSetting::MaxFps);
         let r_fov = self.settings.get_int(IntSetting::FOV);
+        let mut r_gui_scale = self.settings.get_int(IntSetting::GuiScale);
+        if r_gui_scale == 0 {
+            r_gui_scale = 3;
+            self.settings.set_int(IntSetting::GuiScale, r_gui_scale);
+        }
         let r_vsync = self.settings.get_bool(BoolSetting::Vsync);
+        let r_show_fps = self.settings.get_bool(BoolSetting::ShowFps);
 
         // Setting buttons
         // TODO: Slider
@@ -315,6 +356,29 @@ impl super::Screen for VideoSettingsMenu {
             fov_setting.add_text(txt);
         }
         buttons.push(fov_setting);
+
+        let gui_scale_setting = ui::ButtonBuilder::new()
+            .position(-160.0, -50.0)
+            .size(300.0, 40.0)
+            .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+            .create(ui_container);
+        {
+            let mut gui_scale_setting = gui_scale_setting.borrow_mut();
+            let txt = ui::TextBuilder::new()
+                .text(format!("GUI Scale: {r_gui_scale}x"))
+                .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+                .attach(&mut *gui_scale_setting);
+            let txt_gui_scale = txt.clone();
+            gui_scale_setting.add_text(txt);
+            gui_scale_setting.add_click_func(move |_, game| {
+                let r_gui_scale = game.settings.get_int(IntSetting::GuiScale);
+                let r_gui_scale = if r_gui_scale >= 4 { 1 } else { r_gui_scale + 1 };
+                txt_gui_scale.borrow_mut().text = format!("GUI Scale: {r_gui_scale}x");
+                game.settings.set_int(IntSetting::GuiScale, r_gui_scale);
+                true
+            });
+        }
+        buttons.push(gui_scale_setting);
 
         let vsync_setting = ui::ButtonBuilder::new()
             .position(-160.0, 0.0)
@@ -342,8 +406,35 @@ impl super::Screen for VideoSettingsMenu {
         }
         buttons.push(vsync_setting);
 
-        // TODO: Slider
-        let fps_setting = ui::ButtonBuilder::new()
+        let show_fps_setting = ui::ButtonBuilder::new()
+            .position(-160.0, 50.0)
+            .size(300.0, 40.0)
+            .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+            .create(ui_container);
+        {
+            let mut show_fps_setting = show_fps_setting.borrow_mut();
+            let txt = ui::TextBuilder::new()
+                .text(format!(
+                    "Show FPS: {}",
+                    if r_show_fps { "On" } else { "Off" }
+                ))
+                .alignment(ui::VAttach::Middle, ui::HAttach::Center)
+                .attach(&mut *show_fps_setting);
+            let txt_show_fps = txt.clone();
+            show_fps_setting.add_text(txt);
+            show_fps_setting.add_click_func(move |_, game| {
+                let r_show_fps = !game.settings.get_bool(BoolSetting::ShowFps);
+                txt_show_fps.borrow_mut().text =
+                    format!("Show FPS: {}", if r_show_fps { "On" } else { "Off" });
+                game.settings.set_bool(BoolSetting::ShowFps, r_show_fps);
+                true
+            });
+        }
+        buttons.push(show_fps_setting);
+
+        let mut sliders: Vec<ui::SliderRef> = vec![];
+
+        let fps_setting = ui::SliderBuilder::new()
             .position(160.0, 0.0)
             .size(300.0, 40.0)
             .alignment(ui::VAttach::Middle, ui::HAttach::Center)
@@ -361,8 +452,53 @@ impl super::Screen for VideoSettingsMenu {
                 .alignment(ui::VAttach::Middle, ui::HAttach::Center)
                 .attach(&mut *fps_setting);
             fps_setting.add_text(txt);
+            // Keep the 20 wide handle fully inside the 300 wide track and
+            // divide the track evenly into the 26 positions (10..250, Unlimited)
+            let min_x = -140.0;
+            let step = 280.0 / 25.0;
+            let init_pos = if r_max_fps == 0 {
+                25.0
+            } else {
+                ((r_max_fps as f64 / 10.0) - 1.0).clamp(0.0, 25.0)
+            };
+            fps_setting
+                .button
+                .as_mut()
+                .expect("Slider had no button")
+                .borrow_mut()
+                .x = min_x + init_pos * step;
+
+            let update: Rc<dyn Fn(&mut ui::Slider, &Game) -> bool> = Rc::new(move |this, game| {
+                let screen_width =
+                    game.screen_sys.screens.read().last().unwrap().last_width as f64;
+                let slider_btn = this.button.as_mut().expect("Slider had no button");
+                // Follow the mouse continuously instead of snapping the handle.
+                // Convert the cursor (logical window pixels) into 854-space, then
+                // invert the element's draw scale so the handle tracks exactly in
+                // both Scaled and Unscaled (GUI scale) container modes.
+                let sw = ui_scale(game, screen_width);
+                let mx = game.get_last_mouse_x() / screen_width * 854.0;
+                let new_x = ((mx - 854.0 / 2.0 - this.x * sw) / sw).clamp(min_x, -min_x);
+                slider_btn.borrow_mut().x = new_x;
+                let pos = ((new_x - min_x) / step).round().clamp(0.0, 25.0);
+                let fps = if pos as i32 >= 25 { 0 } else { (pos as i32 + 1) * 10 };
+                game.settings.set_int(IntSetting::MaxFps, fps);
+                this.text
+                    .as_mut()
+                    .expect("Slider had no text")
+                    .borrow_mut()
+                    .text = format!(
+                    "FPS cap: {}",
+                    if fps == 0 { "Unlimited".into() } else { fps.to_string() }
+                );
+                true
+            });
+            let update_click = update.clone();
+            let update_drag = update.clone();
+            fps_setting.add_click_func(move |this, game| (update_click)(this, game));
+            fps_setting.add_drag_func(move |this, game| (update_drag)(this, game));
         }
-        buttons.push(fps_setting);
+        sliders.push(fps_setting);
 
         let done_button = ui::ButtonBuilder::new()
             .position(0.0, 50.0)
@@ -385,7 +521,7 @@ impl super::Screen for VideoSettingsMenu {
         self.elements = Some(UIElements {
             background,
             _buttons: buttons,
-            _sliders: vec![],
+            _sliders: sliders,
         });
     }
     fn on_deactive(
@@ -463,7 +599,7 @@ impl super::Screen for AudioSettingsMenu {
         ui_container: &mut ui::Container,
     ) {
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(854.0, 480.0)
             .colour((0, 0, 0, 100))
@@ -573,7 +709,7 @@ impl super::Screen for SkinSettingsMenu {
         ui_container: &mut ui::Container,
     ) {
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(854.0, 480.0)
             .colour((0, 0, 0, 100))
@@ -777,7 +913,7 @@ impl super::Screen for ControlsMenu {
         let r_mouse_sens = self.settings.get_float(FloatSetting::MouseSense);
 
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(854.0, 480.0)
             .colour((0, 0, 0, 100))
@@ -810,32 +946,48 @@ impl super::Screen for ControlsMenu {
         {
             let mut slider = slider.borrow_mut();
             let txt = ui::TextBuilder::new()
-                .text(format!("Mouse Sensetivity: {:.2}x", r_mouse_sens))
+                .text(format!("Mouse Sensitivity: {:.0}%", r_mouse_sens))
                 .alignment(ui::VAttach::Middle, ui::HAttach::Center)
                 .attach(&mut *slider);
             slider.add_text(txt);
-            slider.button.as_mut().unwrap().borrow_mut().x = r_mouse_sens * 30.0 - 150.0;
-            slider.add_click_func(|this, game| {
-                let screen_width = game.screen_sys.screens.read().last().unwrap().last_width as f64;
+            // Keep the 20 wide handle fully inside the 300 wide track and
+            // divide the track evenly into the 200 positions (1%..200%)
+            let min_x = -140.0;
+            let step = 280.0 / 199.0;
+            let init_pos = (r_mouse_sens - 1.0).clamp(0.0, 199.0);
+            slider
+                .button
+                .as_mut()
+                .expect("Slider had no button")
+                .borrow_mut()
+                .x = min_x + init_pos * step;
+
+            let update: Rc<dyn Fn(&mut ui::Slider, &Game) -> bool> = Rc::new(move |this, game| {
+                let screen_width =
+                    game.screen_sys.screens.read().last().unwrap().last_width as f64;
                 let slider_btn = this.button.as_mut().expect("Slider had no button");
-                //update button position
-                slider_btn.borrow_mut().x = (game.get_last_mouse_x()) - screen_width / 2.0 - this.x;
-                //update game setting based on button position
-                game.settings.set_float(
-                    FloatSetting::MouseSense,
-                    (slider_btn.borrow().x + 150.0) / 30.0,
-                );
-                //update text in button
+                // Follow the mouse continuously instead of snapping the handle.
+                // Convert the cursor (logical window pixels) into 854-space, then
+                // invert the element's draw scale so the handle tracks exactly in
+                // both Scaled and Unscaled (GUI scale) container modes.
+                let sw = ui_scale(game, screen_width);
+                let mx = game.get_last_mouse_x() / screen_width * 854.0;
+                let new_x = ((mx - 854.0 / 2.0 - this.x * sw) / sw).clamp(min_x, -min_x);
+                slider_btn.borrow_mut().x = new_x;
+                let pos = ((new_x - min_x) / step).round().clamp(0.0, 199.0);
+                let sens = (pos + 1.0).round().clamp(1.0, 200.0);
+                game.settings.set_float(FloatSetting::MouseSense, sens);
                 this.text
                     .as_mut()
                     .expect("Slider had no text")
                     .borrow_mut()
-                    .text = format!(
-                    "Mouse Sensetivity: {:.2}x",
-                    game.settings.get_float(FloatSetting::MouseSense)
-                );
+                    .text = format!("Mouse Sensitivity: {:.0}%", sens);
                 true
             });
+            let update_click = update.clone();
+            let update_drag = update.clone();
+            slider.add_click_func(move |this, game| (update_click)(this, game));
+            slider.add_drag_func(move |this, game| (update_drag)(this, game));
         }
 
         sliders.push(slider);

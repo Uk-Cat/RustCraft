@@ -20,10 +20,10 @@ use crate::protocol;
 use crate::ui;
 
 use crate::render::Renderer;
-use crate::screen::{Screen, ScreenSystem, ServerList};
+use crate::screen::{Screen, ScreenSystem, MainMenu};
 use crate::ui::Container;
 use crate::StringSetting;
-use leafish_protocol::protocol::login::{Account, AccountType};
+use rustcraft_protocol::protocol::login::{Account, AccountType};
 use parking_lot::Mutex;
 use rand::Rng;
 use rfd::FileDialog;
@@ -96,7 +96,7 @@ impl super::Screen for Launcher {
         {
             let mut options = options.borrow_mut();
             ui::ImageBuilder::new()
-                .texture("leafish:gui/cog")
+                .texture("rustcraft:gui/cog")
                 .position(0.0, 0.0)
                 .size(40.0, 40.0)
                 .alignment(ui::VAttach::Middle, ui::HAttach::Center)
@@ -203,7 +203,7 @@ impl super::Screen for Launcher {
             let account_type = account.account_type.clone();
             // Everything is attached to this
             let back = ui::ImageBuilder::new()
-                .texture("leafish:solid")
+                .texture("rustcraft:solid")
                 .colour((0, 0, 0, 150))
                 .position(0.0, offset * 105.0)
                 .size(500.0, 100.0)
@@ -240,7 +240,7 @@ impl super::Screen for Launcher {
                         active_account.clone().lock().replace(result.ok().unwrap());
                         game.screen_sys
                             .clone()
-                            .add_screen(Box::new(ServerList::new(None)));
+                            .add_screen(Box::new(MainMenu::new()));
                     } else {
                         println!(
                             "An error occurred while attempting to login {}",

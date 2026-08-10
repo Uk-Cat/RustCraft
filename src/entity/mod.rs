@@ -548,6 +548,7 @@ pub struct Digging {
     pub current: Option<DiggingState>,
     pub processed: bool,
     pub effect: Option<Entity>,
+    pub finished_instant: bool,
 }
 
 impl Digging {

@@ -206,7 +206,7 @@ impl Factory {
             let mut m = models.write();
             let model = m
                 .models
-                .get(&Key("leafish".to_owned(), "missing_block".to_owned()))
+                .get(&Key("rustcraft".to_owned(), "missing_block".to_owned()))
                 .unwrap()
                 .clone();
             m.models.insert(key, model);
@@ -335,7 +335,7 @@ impl Factory {
         Some(model)
     }
 
-    fn parse_model(&self, plugin: &str, v: &serde_json::Value) -> Option<RawModel> {
+    pub(crate) fn parse_model(&self, plugin: &str, v: &serde_json::Value) -> Option<RawModel> {
         let parent = v.get("parent").and_then(|v| v.as_str()).unwrap_or("");
         let mut model = if !parent.is_empty() && !parent.starts_with("builtin/") {
             let parent = match parent.split_once(':') {
@@ -540,7 +540,7 @@ impl Factory {
         element
     }
 
-    fn process_model(&self, mut raw: RawModel) -> Model {
+    pub(crate) fn process_model(&self, mut raw: RawModel) -> Model {
         let mut model = Model {
             faces: vec![],
             ambient_occlusion: raw.ambient_occlusion,
@@ -754,10 +754,10 @@ impl Factory {
                             v.toffsety = 8 * th + (y * c + x * s);
                         }
 
-                        if raw.uvlock
-                            && raw.y > 0.0
-                            && (processed_face.facing == Direction::Up
-                                || processed_face.facing == Direction::Down)
+                    if raw.uvlock
+                        && raw.y > 0.0
+                        && (processed_face.facing == Direction::Up
+                            || processed_face.facing == Direction::Down)
                         {
                             let rot_y = (raw.y * (::std::f64::consts::PI / 180.0)) as f32;
                             let c = rot_y.cos() as i16;
@@ -790,6 +790,14 @@ impl Factory {
             }
         }
         model
+    }
+
+    pub(crate) fn get_item_model(&self, plugin: &str, name: &str) -> Option<Model> {
+        let filename = format!("models/block/{}.json", name);
+        let file = self.resources.read().open(plugin, &filename)?;
+        let block_model: serde_json::Value = serde_json::from_reader(file).ok()?;
+        let raw = self.parse_model(plugin, &block_model)?;
+        Some(self.process_model(raw))
     }
 }
 
@@ -868,7 +876,7 @@ enum BuiltinType {
 }
 
 #[derive(Debug)]
-struct RawModel {
+pub(crate) struct RawModel {
     texture_vars: HashMap<String, String, BuildHasherDefault<FNVHash>>,
     elements: Vec<ModelElement>,
     ambient_occlusion: bool,
@@ -899,7 +907,7 @@ impl RawModel {
 }
 
 #[derive(Debug)]
-struct ModelDisplay {
+pub(crate) struct ModelDisplay {
     #[allow(dead_code)]
     rotation: [f64; 3],
     #[allow(dead_code)]
@@ -909,7 +917,7 @@ struct ModelDisplay {
 }
 
 #[derive(Debug)]
-struct ModelElement {
+pub(crate) struct ModelElement {
     from: [f64; 3],
     to: [f64; 3],
     shade: bool,
@@ -918,7 +926,7 @@ struct ModelElement {
 }
 
 #[derive(Debug)]
-struct BlockRotation {
+pub(crate) struct BlockRotation {
     origin: [f64; 3],
     axis: String,
     angle: f64,
@@ -926,7 +934,7 @@ struct BlockRotation {
 }
 
 #[derive(Debug)]
-struct BlockFace {
+pub(crate) struct BlockFace {
     uv: [f64; 4],
     texture: String,
     cull_face: Direction,
@@ -935,23 +943,21 @@ struct BlockFace {
 }
 
 #[derive(Clone, Debug)]
-struct Model {
-    faces: Vec<Face>,
-    ambient_occlusion: bool,
-    #[allow(dead_code)]
-    weight: f64,
+pub(crate) struct Model {
+    pub(crate) faces: Vec<Face>,
+    pub(crate) ambient_occlusion: bool,
+    pub(crate) weight: f64,
 }
 
 #[derive(Clone, Debug)]
-struct Face {
-    cull_face: Direction,
-    facing: Direction,
-    vertices: Vec<BlockVertex>,
-    vertices_texture: Vec<render::Texture>,
-    indices: usize,
-    #[allow(dead_code)]
-    shade: bool,
-    tint_index: i32,
+pub(crate) struct Face {
+    pub(crate) cull_face: Direction,
+    pub(crate) facing: Direction,
+    pub(crate) vertices: Vec<BlockVertex>,
+    pub(crate) vertices_texture: Vec<render::Texture>,
+    pub(crate) indices: usize,
+    pub(crate) shade: bool,
+    pub(crate) tint_index: i32,
 }
 
 impl Model {

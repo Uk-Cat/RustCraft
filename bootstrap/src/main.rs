@@ -19,9 +19,9 @@ const ASSETS_META_PATH: &str = "./assets.txt";
 const CLIENT_VER_PLACEHOLDER: &str = "%client_ver";
 
 #[cfg(target_os = "windows")]
-const MAIN_BINARY_PATH: &str = "./leafish.exe";
+const MAIN_BINARY_PATH: &str = "./rustcraft.exe";
 #[cfg(not(target_os = "windows"))]
-const MAIN_BINARY_PATH: &str = "./leafish";
+const MAIN_BINARY_PATH: &str = "./rustcraft";
 
 #[cfg(target_os = "windows")]
 const BOOTSTRAP_BINARY_PATH: &str = "./bootstrap.exe";
@@ -92,7 +92,7 @@ fn main() {
                 *provided_client = provided_client.replace(CLIENT_VER_PLACEHOLDER, &client_ver);
             }
         }
-        // try to provide leafish with a client path
+        // try to provide rustcraft with a client path
         if (provided_client.is_none()
             || !try_push_client_path(provided_client.as_ref().unwrap(), &mut cmd))
             && !try_push_client_path(CLIENT_JAR_PATH, &mut cmd)
@@ -117,7 +117,7 @@ fn main() {
         let _ = try_update(provided_client.as_ref());
         println!("[Info] Restarting bootstrap...");
         // shut down the process if we performed an update and let our parent bootstrap restart us, running a new version
-        // otherwise we also have to shutdown in order not to restart leafish as soon as it is closed
+        // otherwise we also have to shutdown in order not to restart rustcraft as soon as it is closed
         exit(0);
     }
 }
@@ -160,7 +160,7 @@ fn try_update(provided_client: Option<&String>) -> anyhow::Result<()> {
         env::consts::EXE_SUFFIX
     );
     let main_binary_name = format!(
-        "leafish_{}_{}{}",
+        "rustcraft_{}_{}{}",
         env::consts::ARCH,
         env::consts::OS,
         env::consts::EXE_SUFFIX
@@ -174,7 +174,7 @@ fn try_update(provided_client: Option<&String>) -> anyhow::Result<()> {
                 &asset.updated_at,
                 time_stamp_file(MAIN_BINARY_PATH),
             )? {
-                println!("[Info] Downloading update for leafish binary...");
+                println!("[Info] Downloading update for rustcraft binary...");
                 downloads.push(thread::spawn(move || {
                     let mut new_binary = vec![];
                     ureq::get(&asset.browser_download_url)
@@ -184,7 +184,7 @@ fn try_update(provided_client: Option<&String>) -> anyhow::Result<()> {
                     let mut file = File::create(MAIN_BINARY_PATH)?;
                     file.write_all(&new_binary)?;
                     adjust_binary_perms(&file)?;
-                    println!("[Info] Successfully updated leafish binary");
+                    println!("[Info] Successfully updated rustcraft binary");
                     Ok(())
                 }));
             }

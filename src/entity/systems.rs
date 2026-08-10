@@ -5,10 +5,10 @@ use crate::server::{ConnResource, InventoryContextResource, RendererResource, Wo
 use crate::shared::Position as BPos;
 use crate::world::World;
 use cgmath::InnerSpace;
-use leafish_blocks::Block;
-use leafish_protocol::protocol;
-use leafish_protocol::protocol::packet;
-use leafish_protocol::types::GameMode;
+use rustcraft_blocks::Block;
+use rustcraft_protocol::protocol;
+use rustcraft_protocol::protocol::packet;
+use rustcraft_protocol::types::GameMode;
 use parking_lot::RwLock;
 use shared::Direction;
 
@@ -39,8 +39,9 @@ pub fn update_last_position(mut query: Query<&mut Position>) {
 pub fn lerp_position(game_info: Res<GameInfo>, mut query: Query<(&mut Position, &TargetPosition)>) {
     let delta = game_info.delta.min(5.0);
     for (mut pos, target_pos) in query.iter_mut() {
+        let factor = (delta * target_pos.lerp_amount).min(1.0);
         pos.position =
-            pos.position + (target_pos.position - pos.position) * delta * target_pos.lerp_amount;
+            pos.position + (target_pos.position - pos.position) * factor;
         let len = (pos.position - target_pos.position).magnitude2();
         if !(0.001..=100.0 * 100.0).contains(&len) {
             pos.position = target_pos.position;
@@ -154,6 +155,7 @@ pub fn apply_digging(
 
     for (mouse_buttons, game_mode, mut digging) in query.iter_mut() {
         if game_mode.can_interact_with_world() {
+            system.instant_break = matches!(game_mode, GameMode::Creative);
             if let Some(effect) = digging.effect {
                 if let Ok(mut effect) = effect_query.get_mut(effect) {
                     system.update(
@@ -175,7 +177,12 @@ struct ApplyDigging<'w, 's> {
     conn: Arc<RwLock<Option<protocol::Conn>>>,
     commands: Commands<'w, 's>,
     tool: Option<block::Tool>,
+    instant_break: bool,
 }
+
+/// How long a creative-mode block takes to break, instead of breaking
+/// instantly.
+const CREATIVE_BREAK_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl ApplyDigging<'_, '_> {
     pub fn new<'a, 'b>(
@@ -189,6 +196,21 @@ impl ApplyDigging<'_, '_> {
             conn,
             commands,
             tool,
+            instant_break: false,
+        }
+    }
+
+    /// Whether the current dig completes immediately (creative mode breaks
+    /// every block after a short delay, ignoring the block's mining time).
+    fn is_finished(&self, state: &DiggingState) -> DiggingFinishState {
+        if self.instant_break {
+            if state.start.elapsed() >= CREATIVE_BREAK_DELAY {
+                DiggingFinishState::Finished
+            } else {
+                DiggingFinishState::NotFinished
+            }
+        } else {
+            state.is_finished(&self.tool)
         }
     }
 
@@ -202,21 +224,25 @@ impl ApplyDigging<'_, '_> {
         // Move the previous current value into last, and then calculate the
         // new current value.
         std::mem::swap(&mut digging.last, &mut digging.current);
-        digging.current = self.next_state(&digging.last, mouse_buttons, self.target);
+        if !mouse_buttons.left {
+            digging.finished_instant = false;
+        }
+        digging.current = self.next_state(&digging.last, mouse_buttons, self.target, digging.finished_instant);
 
         // Send required digging packets
         match (&digging.last, &mut digging.current) {
             // Start the new digging operation.
             (None, Some(current)) => {
                 self.start_digging(current, &mut digging.effect);
-                if current.is_finished(&self.tool) == DiggingFinishState::FinishedInstant {
+                if self.is_finished(current) == DiggingFinishState::FinishedInstant {
                     current.finished = true;
+                    digging.finished_instant = true;
                     self.finish_digging(current, &mut digging.effect, world, false);
                 }
             }
             // Cancel the previous digging operation.
             (Some(last), None) if !last.finished => {
-                if last.is_finished(&self.tool) == DiggingFinishState::FinishedInstant {
+                if self.is_finished(last) == DiggingFinishState::FinishedInstant {
                     self.start_digging(last, &mut digging.effect);
                     self.finish_digging(last, &mut digging.effect, world, false);
                 } else {
@@ -227,7 +253,7 @@ impl ApplyDigging<'_, '_> {
             (Some(last), Some(current)) if last.position != current.position => {
                 // Cancel the previous digging operation.
                 if !last.finished {
-                    if last.is_finished(&self.tool) == DiggingFinishState::FinishedInstant {
+                    if self.is_finished(last) == DiggingFinishState::FinishedInstant {
                         // Finish the previous digging operation
                         self.start_digging(last, &mut digging.effect);
                         self.finish_digging(last, &mut digging.effect, world, false);
@@ -237,16 +263,20 @@ impl ApplyDigging<'_, '_> {
                 }
                 // Start the new digging operation.
                 self.start_digging(current, &mut digging.effect);
-                if current.is_finished(&self.tool) == DiggingFinishState::FinishedInstant {
+                if self.is_finished(current) == DiggingFinishState::FinishedInstant {
                     current.finished = true;
+                    digging.finished_instant = true;
                     self.finish_digging(current, &mut digging.effect, world, false);
                 }
             }
             // Finish the new digging operation.
-            (Some(_), Some(current)) => match current.is_finished(&self.tool) {
+            (Some(_), Some(current)) => match self.is_finished(current) {
                 DiggingFinishState::Finished => {
                     current.finished = true;
                     self.finish_digging(current, &mut digging.effect, world, true);
+                    if self.instant_break {
+                        digging.finished_instant = true;
+                    }
                 }
                 DiggingFinishState::FinishedInstant => {
                     // noop as the breaking should already have been performed at this point
@@ -257,9 +287,12 @@ impl ApplyDigging<'_, '_> {
         }
 
         if let Some(current) = &digging.current {
-            // Update the block break animation progress.
+            // Update the block break animation progress. Creative mode has no
+            // breaking animation, only the short break delay.
             if let Some(effect) = effect {
-                effect.update_ratio(current.get_ratio(&self.tool));
+                if !self.instant_break {
+                    effect.update_ratio(current.get_ratio(&self.tool));
+                }
             }
             self.swing_arm();
         }
@@ -275,8 +308,17 @@ impl ApplyDigging<'_, '_> {
             shared::Direction,
             Vector3<f64>,
         )>,
+        finished_instant: bool,
     ) -> Option<DiggingState> {
         if !mouse_buttons.left {
+            return None;
+        }
+
+        // After an instant (creative) break, do not start digging another
+        // block until the mouse button is released and pressed again. Without
+        // this, holding the button drills through an entire wall because the
+        // raycast target advances to the block behind the one just removed.
+        if finished_instant {
             return None;
         }
 

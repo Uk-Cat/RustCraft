@@ -24,6 +24,7 @@ pub struct Manager {
 
 pub const DEFAULT: CollectionKey = CollectionKey(0);
 pub const SUN: CollectionKey = CollectionKey(1);
+pub const FIRST_PERSON: CollectionKey = CollectionKey(2);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CollectionKey(usize);
@@ -86,6 +87,12 @@ impl Manager {
             &greg.get("sun_frag"),
             gl::SRC_ALPHA,
             gl::ONE_FACTOR,
+        );
+        m.add_collection(
+            &greg.get("model_vertex"),
+            &greg.get("model_frag"),
+            gl::SRC_ALPHA,
+            gl::ONE_MINUS_SRC_ALPHA,
         );
         m
     }
@@ -170,6 +177,7 @@ impl Manager {
                 colors: Vec::with_capacity(parts.len()),
                 block_light: 15.0,
                 sky_light: 15.0,
+                no_cull: false,
 
                 array,
                 buffer,
@@ -317,6 +325,9 @@ impl Manager {
                 {
                     continue;
                 }
+                if model.no_cull {
+                    gl::disable(gl::CULL_FACE_FLAG);
+                }
                 model.array.bind();
                 if let Some(v) = &collection.shader.lighting {
                     v.set_float2(model.block_light, model.sky_light)
@@ -328,9 +339,72 @@ impl Manager {
                     v.set_float_multi(&model.colors)
                 }
                 gl::draw_elements(gl::TRIANGLES, model.count, self.index_type, 0);
+                if model.no_cull {
+                    gl::enable(gl::CULL_FACE_FLAG);
+                }
             }
         }
         gl::disable(gl::BLEND);
+    }
+
+    pub fn draw_collection(
+        &mut self,
+        key: CollectionKey,
+        frustum: Frustum<f32>,
+        perspective_matrix: &Matrix4<f32>,
+        camera_matrix: &Matrix4<f32>,
+        light_level: f32,
+        sky_offset: f32,
+    ) {
+        if let Some(collection) = self.collections.get(key.0) {
+            gl::enable(gl::BLEND);
+            collection.shader.program.use_program();
+            if let Some(v) = &collection.shader.perspective_matrix {
+                v.set_matrix4(perspective_matrix)
+            }
+            if let Some(v) = &collection.shader.camera_matrix {
+                v.set_matrix4(camera_matrix)
+            }
+            if let Some(v) = &collection.shader.texture {
+                v.set_int(0)
+            }
+            if let Some(v) = &collection.shader.sky_offset {
+                v.set_float(sky_offset)
+            }
+            if let Some(v) = &collection.shader.light_level {
+                v.set_float(light_level)
+            }
+            gl::blend_func(collection.blend_s, collection.blend_d);
+
+            for model in collection.models.values() {
+                if model.radius > 0.0
+                    && frustum.contains(&Sphere {
+                        center: Point3::new(model.x, -model.y, model.z),
+                        radius: model.radius,
+                    }) == collision::Relation::Out
+                {
+                    continue;
+                }
+                if model.no_cull {
+                    gl::disable(gl::CULL_FACE_FLAG);
+                }
+                model.array.bind();
+                if let Some(v) = &collection.shader.lighting {
+                    v.set_float2(model.block_light, model.sky_light)
+                }
+                if let Some(v) = &collection.shader.model_matrix {
+                    v.set_matrix4_multi(&model.matrix)
+                }
+                if let Some(v) = &collection.shader.color_mul {
+                    v.set_float_multi(&model.colors)
+                }
+                gl::draw_elements(gl::TRIANGLES, model.count, self.index_type, 0);
+                if model.no_cull {
+                    gl::enable(gl::CULL_FACE_FLAG);
+                }
+            }
+            gl::disable(gl::BLEND);
+        }
     }
 }
 
@@ -355,6 +429,7 @@ pub struct Model {
     pub colors: Vec<[f32; 4]>,
     pub block_light: f32,
     pub sky_light: f32,
+    pub no_cull: bool,
 
     array: gl::VertexArray,
     buffer: gl::Buffer,

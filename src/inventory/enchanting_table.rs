@@ -6,8 +6,8 @@ use crate::render::Renderer;
 use crate::ui;
 use crate::ui::{Container, HAttach, VAttach};
 use core::fmt;
-use leafish_protocol::protocol::packet;
-use leafish_protocol::types::GameMode;
+use rustcraft_protocol::protocol::packet;
+use rustcraft_protocol::types::GameMode;
 use std::convert::TryFrom;
 use std::sync::Arc;
 

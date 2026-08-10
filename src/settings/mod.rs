@@ -7,4 +7,4 @@ mod default_keybinds;
 pub use config_var::*;
 pub use keybinds::*;
 
-pub const DOUBLE_JUMP_MS: u32 = 100;
+pub const DOUBLE_JUMP_MS: u32 = 250;

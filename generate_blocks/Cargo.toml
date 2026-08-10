@@ -1,5 +1,5 @@
 [package]
-name = "leafish_generate_blocks"
+name = "rustcraft_generate_blocks"
 version = "0.0.1"
 edition = "2018"
 
@@ -8,6 +8,6 @@ minecraft-data-rs = { version = "0.6.0", path = "../../minecraft-data-rs" }
 convert_case = "0.6.0"
 serde_json = "1.0"
 
-[dependencies.leafish_shared]
+[dependencies.rustcraft_shared]
 path = "../shared"
 version = "0"

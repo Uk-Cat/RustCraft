@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate leafish_resources as internal;
+extern crate rustcraft_resources as internal;
 
 use log::warn;
 
@@ -42,12 +42,12 @@ const ASSET_VERSION: &str = "1.20";
 const ASSET_INDEX_URL: &str =
     "https://piston-meta.mojang.com/v1/packages/54c04f81364f5fcb91da8b95ecf146cc396a4afc/1.20.4.json";
 */
-const RESOURCES_VERSION: &str = "1.19.2";
+const RESOURCES_VERSION: &str = "1.16.5";
 const VANILLA_CLIENT_URL: &str =
-    "https://piston-data.mojang.com/v1/objects/055b30d860ead928cba3849ba920c88b6950b654/client.jar";
-const ASSET_VERSION: &str = "1.19";
+    "https://piston-data.mojang.com/v1/objects/37fd3c903861eeff3bc24b71eed48f828b5269c8/client.jar";
+const ASSET_VERSION: &str = "1.16";
 const ASSET_INDEX_URL: &str =
-    "https://piston-meta.mojang.com/v1/packages/b5c7548ddb9e584e84a5f762da5b78211c715a63/1.19.json";
+    "https://piston-meta.mojang.com/v1/packages/f3c4aa96e12951cd2781b3e1c0e8ab82bf719cf2/1.16.json";
 
 pub trait Pack: Sync + Send {
     fn open(&self, name: &str) -> Option<Box<dyn io::Read>>;
@@ -205,7 +205,7 @@ impl Manager {
                 mui.num_tasks += 1;
                 // Add a ui element for it
                 let background = ui::ImageBuilder::new()
-                    .texture("leafish:solid")
+                    .texture("rustcraft:solid")
                     .position(0.0, -UI_HEIGHT)
                     .size(350.0, UI_HEIGHT)
                     .colour((0, 0, 0, 100))
@@ -214,7 +214,7 @@ impl Manager {
                     .create(ui_container);
 
                 ui::ImageBuilder::new()
-                    .texture("leafish:solid")
+                    .texture("rustcraft:solid")
                     .position(0.0, 0.0)
                     .size(350.0, 10.0)
                     .colour((0, 0, 0, 200))
@@ -235,7 +235,7 @@ impl Manager {
                     .attach(&mut *background.borrow_mut());
 
                 let progress_bar = ui::ImageBuilder::new()
-                    .texture("leafish:solid")
+                    .texture("rustcraft:solid")
                     .position(0.0, 0.0)
                     .size(0.0, 10.0)
                     .colour((0, 255, 0, 255))
@@ -386,9 +386,8 @@ impl Manager {
                 }
                 fs::rename(tmp_file, &location).unwrap();
                 // this operation is a combination of `- 1` and `+ LOAD_ASSETS_FLAG`
-                #[allow(arithmetic_overflow)]
                 pending_downloads.fetch_add(
-                    (-1_isize as usize) + Self::LOAD_ASSETS_FLAG,
+                    (-1_isize as usize).wrapping_add(Self::LOAD_ASSETS_FLAG),
                     Ordering::AcqRel,
                 );
             }
@@ -451,7 +450,7 @@ impl Manager {
         let loc = paths::get_data_dir().join(format!("resources-{}", RESOURCES_VERSION));
         let location = path::Path::new(&loc);
         // check if there are already preexisting assets we can use
-        if fs::metadata(location.join("leafish.assets")).is_ok() {
+        if fs::metadata(location.join("rustcraft.assets")).is_ok() {
             self.load_vanilla();
             return;
         }
@@ -505,9 +504,8 @@ impl Manager {
             Self::unpack_assets(&progress_info, tmp_file_path.to_str().unwrap());
 
             // this operation is a combination of `- 1` and `+ LOAD_VANILLA_FLAG`
-            #[allow(arithmetic_overflow)]
             pending_downloads.fetch_add(
-                (-1_isize as usize) + Self::LOAD_VANILLA_FLAG,
+                (-1_isize as usize).wrapping_add(Self::LOAD_VANILLA_FLAG),
                 Ordering::AcqRel,
             );
 
@@ -545,7 +543,32 @@ impl Manager {
             io::copy(&mut file, &mut out).unwrap();
         }
 
-        fs::File::create(location.join("leafish.assets")).unwrap(); // Marker file
+        fs::File::create(location.join("rustcraft.assets")).unwrap(); // Marker file
+    }
+
+    pub fn redownload(&mut self) {
+        let res_loc = paths::get_data_dir().join(format!("resources-{}", RESOURCES_VERSION));
+        if fs::metadata(&res_loc).is_ok() {
+            fs::remove_dir_all(&res_loc).unwrap();
+        }
+
+        let index_loc = paths::get_data_dir().join(format!("index/{}.json", ASSET_VERSION));
+        if fs::metadata(&index_loc).is_ok() {
+            fs::remove_file(&index_loc).unwrap();
+        }
+
+        let objects_loc = paths::get_data_dir().join("objects");
+        if fs::metadata(&objects_loc).is_ok() {
+            fs::remove_dir_all(&objects_loc).unwrap();
+        }
+
+        self.packs.truncate(1);
+        self.version = 0;
+        self.vanilla_progress = Arc::new(Mutex::new(Progress { tasks: vec![] }));
+        self.pending_downloads = Arc::new(AtomicUsize::new(1));
+
+        self.download_vanilla(None);
+        self.download_assets();
     }
 
     fn add_task(progress: &Arc<Mutex<Progress>>, name: &str, file: &str, length: u64) {
@@ -625,7 +648,7 @@ impl Pack for ObjectPack {
         }
         let name = &name["assets/".len()..];
         if let Some(hash) = self.objects.get(name) {
-            let root_location = path::Path::new("./objects/");
+            let root_location = paths::get_data_dir().join("objects");
             let hash_path = format!("{}/{}", &hash[..2], hash);
             let location = root_location.join(hash_path);
             match fs::File::open(location) {

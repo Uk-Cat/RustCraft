@@ -1,5 +1,5 @@
 use convert_case::{Case, Casing};
-use leafish_shared::Version;
+use rustcraft_shared::Version;
 use minecraft_data_rs::api::versions_by_minecraft_version;
 use minecraft_data_rs::models::block_collision_shapes::{
     BlockCollisionShapes, CollisionShape, CollisionShapeIds,
@@ -1286,7 +1286,7 @@ fn main() -> std::io::Result<()> {
     if args.len() < 3 {
         let usage = format!("Usage: {} <resources-dir> <output-dir>\n", args[0])
             + &format!(
-                "Example: {} ~/.local/share/leafish/resources-1.19.2 blocks/src/",
+                "Example: {} ~/.local/share/rustcraft/resources-1.19.2 blocks/src/",
                 args[0]
             );
         println!("{}", usage);
@@ -1343,7 +1343,7 @@ fn main() -> std::io::Result<()> {
         for meta in &block_meta_list {
             writeln!(blocks_file, "{}", meta.to_model())?;
         }
-        writeln!(blocks_file, "            Block::Missing {{ }} => (\"leafish\", \"missing_block\"),")?;
+        writeln!(blocks_file, "            Block::Missing {{ }} => (\"rustcraft\", \"missing_block\"),")?;
         writeln!(blocks_file, "        }}")?;
         writeln!(blocks_file, "    }}")?;
         writeln!(blocks_file, "")?;

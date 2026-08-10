@@ -24,8 +24,8 @@ use crate::screen::{Screen, ScreenSystem};
 use crate::settings::SettingStore;
 use crate::ui;
 use crate::{protocol, StringSetting};
-use leafish_protocol::protocol::login::{Account, AccountType};
-use leafish_protocol::protocol::Error;
+use rustcraft_protocol::protocol::login::{Account, AccountType};
+use rustcraft_protocol::protocol::Error;
 use std::ops::Deref;
 
 pub struct Login {

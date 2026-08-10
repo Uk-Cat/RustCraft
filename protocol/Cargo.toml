@@ -1,5 +1,5 @@
 [package]
-name = "leafish_protocol"
+name = "rustcraft_protocol"
 version = "0.0.1"
 authors = [ "Thinkofdeath <thinkofdeath@spigotmc.org>", "iceiix <ice_ix@protonmail.ch>", "terrarier2111" ]
 edition = "2018"
@@ -28,6 +28,6 @@ bevy_ecs = "0.13"
 
 reqwest = { version = "0.11", features = [ "blocking" ]}
 
-[dependencies.leafish_shared]
+[dependencies.rustcraft_shared]
 path = "../shared"
 version = "0"

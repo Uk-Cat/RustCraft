@@ -19,7 +19,7 @@ use crate::entity::{EntityType, GameInfo, Gravity, MouseButtons, TargetPosition,
 use crate::format;
 use crate::inventory::material::versions::to_material;
 use crate::inventory::Inventory;
-use crate::inventory::{inventory_from_type, InventoryContext, InventoryType, Item};
+use crate::inventory::{inventory_from_type, InventoryContext, InventoryType, Item, Material};
 use crate::particle::block_break_effect::{BlockBreakEffect, BlockEffectData};
 use crate::protocol::{self, forge, mapped_packet, packet};
 use crate::render;
@@ -36,6 +36,7 @@ use crate::types::GameMode;
 use crate::world::{self, World};
 use crate::world::{CPos, LightData, LightUpdate};
 use crate::{ecs, Game};
+use collision::Aabb;
 use arc_swap::ArcSwapOption;
 use atomic_float::AtomicF64;
 use base64::engine::general_purpose::STANDARD;
@@ -49,13 +50,13 @@ use crossbeam_channel::unbounded;
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 use instant::{Duration, Instant};
-use leafish_protocol::format::Component;
-use leafish_protocol::item::Stack;
-use leafish_protocol::protocol::login::Account;
-use leafish_protocol::protocol::mapped_packet::MappablePacket;
-use leafish_protocol::protocol::mapped_packet::MappedPacket;
-use leafish_protocol::protocol::packet::{send_client_status, send_drop_item, ClientStatus, Hand};
-use leafish_protocol::protocol::Conn;
+use rustcraft_protocol::format::Component;
+use rustcraft_protocol::item::Stack;
+use rustcraft_protocol::protocol::login::Account;
+use rustcraft_protocol::protocol::mapped_packet::MappablePacket;
+use rustcraft_protocol::protocol::mapped_packet::MappedPacket;
+use rustcraft_protocol::protocol::packet::{send_client_status, send_drop_item, ClientStatus, Hand};
+use rustcraft_protocol::protocol::Conn;
 use log::{debug, error, info, warn};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -127,13 +128,16 @@ pub struct Server {
     entity_tick_timer: AtomicF64,
     pub received_chat_at: ArcSwapOption<Instant>,
 
-    target_info: Arc<RwLock<target::Info>>,
+    pub target_info: Arc<RwLock<target::Info>>,
     pub render_list_computer: Sender<bool>,
     pub render_list_computer_notify: Receiver<bool>,
     pub hud_context: Arc<RwLock<HudContext>>,
     pub inventory_context: Arc<RwLock<InventoryContext>>,
+    block_item_map: RwLock<HashMap<String, u16>>,
     pub dead: AtomicBool,
     just_died: AtomicBool,
+    difficulty: AtomicU32,
+    connected_at: Instant,
     last_chat_open: AtomicBool,
     pub chat_open: AtomicBool,
     pub chat_ctx: Arc<ChatContext>,
@@ -554,6 +558,12 @@ impl Server {
                             MappedPacket::Respawn(respawn) => {
                                 server.on_respawn(respawn);
                             }
+                            MappedPacket::ServerDifficulty(difficulty) => {
+                                server.difficulty.store(
+                                    (difficulty.difficulty as u32).min(3),
+                                    Ordering::Release,
+                                );
+                            }
                             MappedPacket::SpawnMob(spawn) => {
                                 use std::f64::consts::PI;
                                 server.on_entity_spawn(
@@ -970,8 +980,11 @@ impl Server {
             render_list_computer_notify,
             hud_context,
             inventory_context,
+            block_item_map: RwLock::new(HashMap::new()),
             dead: AtomicBool::new(false),
             just_died: AtomicBool::new(false),
+            difficulty: AtomicU32::new(2),
+            connected_at: Instant::now(),
             last_chat_open: AtomicBool::new(false),
             chat_open: AtomicBool::new(false),
             chat_ctx: Arc::new(ChatContext::new()),
@@ -1000,6 +1013,24 @@ impl Server {
         self.disconnect_data.write().disconnect_reason = reason;
         self.disconnect_data.write().just_disconnected = true;
         self.disconnect_gracefully.store(true, Ordering::Relaxed);
+    }
+
+    /// Base difficulty (0=Peaceful, 1=Easy, 2=Normal, 3=Hard).
+    pub fn get_difficulty(&self) -> u32 {
+        self.difficulty.load(Ordering::Acquire)
+    }
+
+    /// Local difficulty, approximated from the base difficulty and the time
+    /// spent in the world since connecting. The client does not track in-world
+    /// time, so the regional difficulty factor is derived from real time.
+    pub fn local_difficulty(&self) -> f64 {
+        let base = self.difficulty.load(Ordering::Acquire) as f64;
+        if base == 0.0 {
+            return 0.0;
+        }
+        let hours = self.connected_at.elapsed().as_secs_f64() / 3600.0;
+        let regional = 1.0 - 0.5f64.powf(hours / 2.0);
+        (base + 0.75 * regional).clamp(0.0, 4.0)
     }
 
     pub fn finish_disconnect(&self) {
@@ -1091,6 +1122,8 @@ impl Server {
                 );
                 renderer.camera.lock().yaw = rotation.yaw;
                 renderer.camera.lock().pitch = rotation.pitch;
+                drop(entities);
+                renderer.update_camera_matrix();
             }
         }
         self.entity_tick(delta, game.is_focused(), self.dead.load(Ordering::Acquire));
@@ -1404,18 +1437,341 @@ impl Server {
 
     pub fn on_left_click(&self, focused: bool, shift: bool) {
         if focused {
-            let mut entities = self.entities.write();
-            // check if the player exists, as it might not be initialized very early on server join
-            if let Some(player) = self.player.load().as_ref() {
-                let mut player = entities.world.entity_mut(player.1);
-                let mut mouse_buttons = player.get_mut::<MouseButtons>().unwrap();
-                packet::send_arm_swing(self.conn.write().as_mut().unwrap(), Hand::MainHand)
+            use cgmath::InnerSpace;
+
+            let origin = self.renderer.camera.lock().pos.to_vec();
+            let direction = self.renderer.view_vector.lock().cast().unwrap();
+            let max_dist = 4.0;
+
+            // Find closest block hit
+            let block_hit = target::trace_ray(
+                &self.world,
+                max_dist,
+                origin,
+                direction,
+                target::test_block,
+            );
+
+            // Find closest entity hit
+            let entity_hit = self.find_entity_at_crosshair();
+
+            let entity_closer = match (block_hit, entity_hit) {
+                (Some((pos, _, _, cursor)), Some((entity_id, entity_dist))) => {
+                    let block_pos = cgmath::Vector3::new(pos.x as f64, pos.y as f64, pos.z as f64);
+                    let block_dist = (block_pos + cursor - origin).magnitude();
+                    if entity_dist < block_dist {
+                        // Attack entity
+                        let mut conn = self.conn.write();
+                        packet::send_arm_swing(conn.as_mut().unwrap(), Hand::MainHand).unwrap();
+                        packet::send_use_entity(
+                            conn.as_mut().unwrap(),
+                            entity_id,
+                            1,
+                            Some(Hand::MainHand),
+                            false,
+                        )
+                        .unwrap();
+                        true
+                    } else {
+                        false
+                    }
+                }
+                (None, Some((entity_id, _))) => {
+                    // No block, attack entity
+                    let mut conn = self.conn.write();
+                    packet::send_arm_swing(conn.as_mut().unwrap(), Hand::MainHand).unwrap();
+                    packet::send_use_entity(
+                        conn.as_mut().unwrap(),
+                        entity_id,
+                        1,
+                        Some(Hand::MainHand),
+                        false,
+                    )
                     .unwrap();
-                mouse_buttons.left = true;
+                    true
+                }
+                _ => false,
+            };
+
+            if !entity_closer {
+                // Swing arm / start digging
+                let mut entities = self.entities.write();
+                if let Some(player) = self.player.load().as_ref() {
+                    let mut player = entities.world.entity_mut(player.1);
+                    let mut mouse_buttons = player.get_mut::<MouseButtons>().unwrap();
+                    packet::send_arm_swing(self.conn.write().as_mut().unwrap(), Hand::MainHand)
+                        .unwrap();
+                    mouse_buttons.left = true;
+                }
             }
         } else {
             self.inventory_context.write().on_click(true, shift);
         }
+    }
+
+    fn find_entity_at_crosshair(&self) -> Option<(i32, f64)> {
+        use crate::entity::Bounds;
+        use cgmath::InnerSpace;
+
+        let renderer = &self.renderer;
+        let origin = renderer.camera.lock().pos.to_vec();
+        let direction = *renderer.view_vector.lock();
+        let max_dist = 4.0;
+
+        let entity_map = self.entity_map.read();
+        let entities = self.entities.read();
+
+        // Skip the local player
+        let player_bevy = self.player.load().as_ref().map(|p| p.1);
+
+        let mut closest: Option<(i32, f64)> = None;
+
+        for (&server_id, bevy_entity) in entity_map.iter() {
+            if Some(*bevy_entity) == player_bevy {
+                continue;
+            }
+            let entity = match entities.world.get_entity(*bevy_entity) {
+                Some(e) => e,
+                None => continue,
+            };
+            let (pos, bounds) = match (
+                entity.get::<crate::entity::Position>(),
+                entity.get::<Bounds>(),
+            ) {
+                (Some(p), Some(b)) => (p, b),
+                _ => continue,
+            };
+            let aabb = bounds.bounds.add_v(pos.position);
+            if let Some(hit) = target::intersects_line(aabb, origin, direction.cast().unwrap()) {
+                let dist = (hit - origin).magnitude();
+                if dist <= max_dist && closest.map_or(true, |(_, d)| dist < d) {
+                    closest = Some((server_id, dist));
+                }
+            }
+        }
+
+        closest
+    }
+
+    pub fn on_middle_click(&self, focused: bool) {
+        if !focused {
+            return;
+        }
+        use cgmath::InnerSpace;
+
+        let origin = self.renderer.camera.lock().pos.to_vec();
+        let direction = self.renderer.view_vector.lock().cast().unwrap();
+        let max_dist = 4.0;
+
+        let block_hit = target::trace_ray(
+            &self.world,
+            max_dist,
+            origin,
+            direction,
+            target::test_block,
+        );
+
+        let (_, block, _, _) = match block_hit {
+            Some(hit) => hit,
+            None => return,
+        };
+        if matches!(block, world::block::Block::Air {}) {
+            return;
+        }
+
+        let Some(material) = self.block_to_material(block) else {
+            return;
+        };
+        if material == Material::Air {
+            return;
+        }
+
+        let game_mode = self.hud_context.read().game_mode;
+        match game_mode {
+            GameMode::Creative => self.pick_block_creative(material),
+            GameMode::Survival | GameMode::Adventure => self.pick_block_survival(material),
+            _ => {}
+        }
+    }
+
+    fn block_to_material(&self, block: world::block::Block) -> Option<Material> {
+        let version = self.mapped_protocol_version;
+        if version >= Version::V1_13 {
+            // In 1.13+ block-state ids no longer match item ids (they diverged
+            // from 1.16.2 onwards), so resolve the material by registry name.
+            let (_, name) = block.get_model();
+            let item_id = self.block_to_item_id(name)?;
+            let material = to_material(item_id, None, None, version);
+            return if material == Material::Air {
+                None
+            } else {
+                Some(material)
+            };
+        }
+
+        let ids = self
+            .world
+            .id_map
+            .by_block(block, &self.world.modded_block_ids.load());
+        let id = *ids.first()?;
+        let material = to_material(
+            (id >> 4) as u16,
+            Some((id & 0xf) as isize),
+            None,
+            version,
+        );
+        if material == Material::Air {
+            None
+        } else {
+            Some(material)
+        }
+    }
+
+    fn block_to_item_id(&self, block_name: &str) -> Option<u16> {
+        let version = self.mapped_protocol_version;
+        let mut map = self.block_item_map.write();
+        if map.is_empty() {
+            for id in 0..=65535u16 {
+                let material = to_material(id, None, None, version);
+                if material == Material::Air {
+                    continue;
+                }
+                if let Some(name) = material.texture_locations().1.strip_prefix("block/") {
+                    map.entry(name.to_string()).or_insert(id);
+                }
+            }
+        }
+        map.get(block_name).copied()
+    }
+
+    fn pick_block_creative(&self, material: Material) {
+        let hotbar_index = self.inventory_context.read().hotbar_index as u16;
+        let selected_slot = 36 + hotbar_index;
+
+        let player_inventory = self.inventory_context.read().player_inventory.clone();
+        let current = player_inventory.read().get_item(selected_slot);
+        if current.as_ref().map_or(false, |item| item.material == material) {
+            return;
+        }
+
+        let found = (9..45u16).find(|&slot| {
+            player_inventory
+                .read()
+                .get_item(slot)
+                .map_or(false, |item| item.material == material)
+        });
+
+        match found {
+            Some(slot) if slot >= 36 => {
+                self.set_selected_slot((slot - 36) as u8);
+            }
+            _ => {
+                if let Some(stack) = self.stack_for_material(material) {
+                    self.write_packet(packet::play::serverbound::CreativeInventoryAction {
+                        slot: selected_slot as i16,
+                        clicked_item: Some(stack),
+                    });
+                }
+            }
+        }
+    }
+
+    fn pick_block_survival(&self, material: Material) {
+        let (hotbar_index, cursor_empty) = {
+            let inv = self.inventory_context.read();
+            (inv.hotbar_index, inv.cursor.is_none())
+        };
+        let selected_slot = 36 + hotbar_index as u16;
+
+        let player_inventory = self.inventory_context.read().player_inventory.clone();
+        let found = (9..45u16).find(|&slot| {
+            player_inventory
+                .read()
+                .get_item(slot)
+                .map_or(false, |item| item.material == material)
+        });
+
+        let Some(found_slot) = found else {
+            return;
+        };
+
+        if found_slot >= 36 {
+            self.set_selected_slot((found_slot - 36) as u8);
+        } else if cursor_empty {
+            self.swap_inventory_slots(found_slot, selected_slot);
+        }
+    }
+
+    fn set_selected_slot(&self, slot: u8) {
+        self.inventory_context.write().hotbar_index = slot;
+        self.hud_context.write().update_slot_index(slot);
+    }
+
+    fn stack_for_material(&self, material: Material) -> Option<Stack> {
+        use crate::inventory::material::versions::{get_stack_size, to_id};
+
+        let version = self.mapped_protocol_version;
+        let id = to_id(material, version);
+        if id == 0 {
+            return None;
+        }
+        Some(Stack {
+            id: id as isize,
+            count: get_stack_size(material, version) as isize,
+            damage: if version < Version::V1_13 {
+                Some(0)
+            } else {
+                None
+            },
+            ..Stack::default()
+        })
+    }
+
+    fn swap_inventory_slots(&self, from: u16, to: u16) {
+        let inventory = self.inventory_context.read().player_inventory.clone();
+        let (item_from, item_to) = {
+            let mut inv = inventory.write();
+            let a = inv.get_item(from);
+            let b = inv.get_item(to);
+            inv.set_item(from, b.clone());
+            inv.set_item(to, a.clone());
+            (a, b)
+        };
+        self.hud_context
+            .read()
+            .dirty_slots
+            .store(true, Ordering::Relaxed);
+
+        let action = inventory.read().get_client_state_id() as u16;
+        let mut conn = self.conn.write();
+        let conn = conn.as_mut().unwrap();
+        packet::send_click_container(
+            conn,
+            0,
+            from as i16,
+            packet::InventoryOperation::LeftClick,
+            action,
+            None,
+        )
+        .unwrap();
+        packet::send_click_container(
+            conn,
+            0,
+            to as i16,
+            packet::InventoryOperation::LeftClick,
+            action,
+            item_from.map(|item| item.stack),
+        )
+        .unwrap();
+        packet::send_click_container(
+            conn,
+            0,
+            from as i16,
+            packet::InventoryOperation::LeftClick,
+            action,
+            item_to.map(|item| item.stack),
+        )
+        .unwrap();
     }
 
     pub fn on_release_left_click(&self, focused: bool) {
@@ -1777,7 +2133,7 @@ impl Server {
 
         // Let the server know who we are
         let brand = plugin_messages::Brand {
-            brand: "leafish".into(),
+            brand: "rustcraft".into(),
         };
         brand.write_to(self.conn.write().as_mut().unwrap());
         /*packet::send_position_look(

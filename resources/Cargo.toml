@@ -1,5 +1,5 @@
 [package]
-name = "leafish_resources"
+name = "rustcraft_resources"
 version = "0.1.0"
 authors = [ "Thinkofdeath <thinkofdeath@spigotmc.org>" ]
 edition = "2018"

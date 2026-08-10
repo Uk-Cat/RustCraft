@@ -5,11 +5,11 @@ use crate::render::inventory::InventoryWindow;
 use crate::render::Renderer;
 use crate::ui;
 use crate::ui::{Container, HAttach, VAttach};
-use leafish_protocol::types::GameMode;
+use rustcraft_protocol::types::GameMode;
 use log::warn;
 use std::sync::Arc;
 
-use leafish_protocol::protocol::packet;
+use rustcraft_protocol::protocol::packet;
 use parking_lot::RwLock;
 
 const WINDOW_WIDTH: i32 = 176;

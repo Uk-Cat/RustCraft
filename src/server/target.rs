@@ -3,7 +3,9 @@ use crate::render::model;
 use crate::shared::{Direction, Position};
 use crate::world;
 use crate::world::block;
+use collision::Aabb3;
 use collision::Aabb;
+use cgmath::Point3;
 use std::sync::Arc;
 
 pub struct Info {
@@ -27,6 +29,14 @@ impl Info {
         }
     }
 
+    pub fn target_block(&self) -> &block::Block {
+        &self.last_block
+    }
+
+    pub fn target_pos(&self) -> &Position {
+        &self.last_pos
+    }
+
     pub fn clear(&mut self) {
         self.last_block = block::Air {};
         self.model.take();
@@ -42,9 +52,11 @@ impl Info {
         let mut parts = vec![];
 
         const LINE_SIZE: f64 = 1.0 / 128.0;
-        let tex = render::Renderer::get_texture(renderer.get_textures_ref(), "leafish:solid");
+        let tex = render::Renderer::get_texture(renderer.get_textures_ref(), "rustcraft:solid");
 
-        for bound in bl.get_collision_boxes() {
+        let boxes = get_target_boxes(&bl);
+
+        for bound in boxes {
             let bound = bound.add_v(cgmath::Vector3::new(
                 pos.x as f64,
                 pos.y as f64,
@@ -136,6 +148,82 @@ impl Info {
     }
 }
 
+fn get_target_boxes(block: &block::Block) -> Vec<Aabb3<f64>> {
+    let boxes = block.get_collision_boxes();
+    if !boxes.is_empty() {
+        return boxes;
+    }
+    match *block {
+        block::Block::StoneButton { face, facing, powered }
+        | block::Block::OakButton { face, facing, powered }
+        | block::Block::SpruceButton { face, facing, powered }
+        | block::Block::BirchButton { face, facing, powered }
+        | block::Block::JungleButton { face, facing, powered }
+        | block::Block::AcaciaButton { face, facing, powered }
+        | block::Block::DarkOakButton { face, facing, powered }
+        | block::Block::MangroveButton { face, facing, powered }
+        | block::Block::CrimsonButton { face, facing, powered }
+        | block::Block::WarpedButton { face, facing, powered }
+        | block::Block::PolishedBlackstoneButton { face, facing, powered }
+        | block::Block::Lever { face, facing, powered } => {
+            let thick = if powered { 1.0 / 16.0 } else { 2.0 / 16.0 };
+            vec![match face {
+                block::AttachedFace::Wall => {
+                    let w = 3.0 / 16.0;
+                    let h = 7.0 / 16.0;
+                    let d = thick;
+                    let x0 = (1.0 - w) / 2.0;
+                    let z0 = (1.0 - w) / 2.0;
+                    let y0 = (1.0 - h) / 2.0;
+                    match facing {
+                        Direction::North => Aabb3::new(
+                            Point3::new(x0, y0, 1.0 - d),
+                            Point3::new(x0 + w, y0 + h, 1.0),
+                        ),
+                        Direction::South => Aabb3::new(
+                            Point3::new(x0, y0, 0.0),
+                            Point3::new(x0 + w, y0 + h, d),
+                        ),
+                        Direction::West => Aabb3::new(
+                            Point3::new(1.0 - d, y0, z0),
+                            Point3::new(1.0, y0 + h, z0 + w),
+                        ),
+                        Direction::East => Aabb3::new(
+                            Point3::new(0.0, y0, z0),
+                            Point3::new(d, y0 + h, z0 + w),
+                        ),
+                        _ => unreachable!(),
+                    }
+                }
+                block::AttachedFace::Floor => {
+                    let w = 6.0 / 16.0;
+                    let h = thick;
+                    let x0 = (1.0 - w) / 2.0;
+                    let z0 = (1.0 - w) / 2.0;
+                    Aabb3::new(
+                        Point3::new(x0, 0.0, z0),
+                        Point3::new(x0 + w, h, z0 + w),
+                    )
+                }
+                block::AttachedFace::Ceiling => {
+                    let w = 6.0 / 16.0;
+                    let h = thick;
+                    let x0 = (1.0 - w) / 2.0;
+                    let z0 = (1.0 - w) / 2.0;
+                    Aabb3::new(
+                        Point3::new(x0, 1.0 - h, z0),
+                        Point3::new(x0 + w, 1.0, z0 + w),
+                    )
+                }
+            }]
+        }
+        _ => vec![Aabb3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 1.0),
+        )],
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn test_block(
     world: &world::World,
@@ -147,8 +235,14 @@ pub fn test_block(
     Option<(Position, block::Block, Direction, cgmath::Vector3<f64>)>,
 ) {
     let block = world.get_block(pos);
+    if matches!(block, block::Block::Air {})
+        || matches!(block, block::Block::Water { .. } | block::Block::Lava { .. })
+    {
+        return (false, None);
+    }
     let posf = cgmath::Vector3::new(pos.x as f64, pos.y as f64, pos.z as f64);
-    for bound in block.get_collision_boxes() {
+    let boxes = get_target_boxes(&block);
+    for bound in boxes {
         let bound = bound.add_v(posf);
         if let Some(hit) = intersects_line(bound, s, d) {
             let cursor = hit - posf;
@@ -177,7 +271,7 @@ fn find_face(bound: collision::Aabb3<f64>, hit: cgmath::Vector3<f64>) -> Directi
     }
 }
 
-fn intersects_line(
+pub fn intersects_line(
     bound: collision::Aabb3<f64>,
     origin: cgmath::Vector3<f64>,
     dir: cgmath::Vector3<f64>,

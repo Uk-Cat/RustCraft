@@ -33,10 +33,12 @@ impl Screen for InventoryWindow {
             .write()
             .inventory
             .replace(self.inventory.clone());
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         self.inventory
             .clone()
             .write()
             .init(&renderer, ui_container, self);
+        ui_container.default_scale = None;
     }
 
     fn deinit(
@@ -72,6 +74,7 @@ impl Screen for InventoryWindow {
         ui_container: &mut Container,
         _delta: f64,
     ) {
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         self.inventory
             .clone()
             .write()
@@ -80,6 +83,7 @@ impl Screen for InventoryWindow {
             .clone()
             .write()
             .draw_cursor(renderer, ui_container, self);
+        ui_container.default_scale = None;
     }
 
     fn on_resize(
@@ -89,6 +93,7 @@ impl Screen for InventoryWindow {
         ui_container: &mut Container,
     ) {
         self.clear_elements();
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         self.inventory.clone().write().resize(
             renderer.screen_data.read().safe_width,
             renderer.screen_data.read().safe_height,
@@ -96,6 +101,7 @@ impl Screen for InventoryWindow {
             ui_container,
             self,
         );
+        ui_container.default_scale = None;
     }
 
     fn on_key_press(&mut self, key: (Key, PhysicalKey), down: bool, repeat: bool, game: &Game) {
@@ -150,8 +156,18 @@ impl InventoryWindow {
     ) {
         let icon_scale = Hud::icon_scale(renderer);
         let textures = item.material.texture_locations();
-        let texture =
-            if let Some(tex) = Renderer::get_texture_optional(&renderer.textures, &textures.0) {
+
+        // Try 3D baked texture for block items
+        let texture_name = if let Some(baked_name) = renderer
+            .item_renderer
+            .lock()
+            .get_or_bake(&item.material)
+        {
+            baked_name
+        } else {
+            let texture = if let Some(tex) =
+                Renderer::get_texture_optional(&renderer.textures, &textures.0)
+            {
                 if tex.dummy {
                     textures.1
                 } else {
@@ -160,12 +176,15 @@ impl InventoryWindow {
             } else {
                 textures.1
             };
+            format!("minecraft:{}", texture)
+        };
+
         let image = ui::ImageBuilder::new()
             .texture_coords((0.0, 0.0, 256.0, 256.0))
             .position(x, y)
             .alignment(v_attach, ui::HAttach::Left)
             .size(icon_scale * 16.0, icon_scale * 16.0)
-            .texture(format!("minecraft:{}", texture))
+            .texture(texture_name)
             .create(ui_container);
         elements.push(image);
 

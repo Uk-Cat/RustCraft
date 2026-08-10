@@ -19,6 +19,7 @@ pub mod shaders;
 pub mod clouds;
 pub mod hud;
 pub mod inventory;
+pub mod item;
 pub mod model;
 pub mod ui;
 
@@ -66,7 +67,7 @@ pub struct Renderer {
 
     pub camera: Mutex<Camera>,
     perspective_matrix: Mutex<cgmath::Matrix4<f32>>,
-    camera_matrix: Mutex<cgmath::Matrix4<f32>>,
+    pub camera_matrix: Mutex<cgmath::Matrix4<f32>>,
     pub frustum: Mutex<collision::Frustum<f32>>,
     pub view_vector: Mutex<cgmath::Vector3<f32>>,
 
@@ -74,6 +75,8 @@ pub struct Renderer {
     pub screen_data: RwLock<ScreenData>,
     pub light_data: Mutex<LightData>,
     skin_exchange_data: Mutex<SkinExchangeData>,
+    pub(crate) models_factory: Arc<RwLock<crate::model::Factory>>,
+    pub item_renderer: Mutex<item::ItemRenderer>,
 }
 
 struct ChunkRenderData {
@@ -229,6 +232,17 @@ impl Renderer {
         let clouds = Some(clouds::Clouds::new(&greg, textures.clone()));
         // TODO: setting to disable clouds on native, too, if desired
 
+        let models_factory = Arc::new(RwLock::new(crate::model::Factory::new(
+            res.clone(),
+            textures.clone(),
+        )));
+
+        let item_renderer = item::ItemRenderer::new(
+            textures.clone(),
+            res.clone(),
+            models_factory.clone(),
+        );
+
         Self {
             resource_version: AtomicUsize::from(version),
             models: Arc::new(Mutex::new(model::Manager::new(&greg))),
@@ -236,6 +250,8 @@ impl Renderer {
             textures,
             ui: Mutex::new(ui),
             resources: res,
+            models_factory,
+            item_renderer: Mutex::new(item_renderer),
             texture_data: Mutex::new(TextureData {
                 gl_texture: tex,
                 texture_layers: 1,
@@ -285,7 +301,6 @@ impl Renderer {
     }
 
     pub fn update_camera(&self, width: u32, height: u32) {
-        use std::f64::consts::PI as PI64;
         // Not a sane place to put this but it works
         {
             let version = self.resources.read().version();
@@ -299,6 +314,9 @@ impl Renderer {
                     self.resource_version.load(Ordering::Acquire),
                     &self.textures,
                 );
+
+                self.item_renderer.lock().reset();
+                self.models_factory.write().version_change();
             }
         }
 
@@ -322,6 +340,11 @@ impl Renderer {
             self.init_trans(width, height);
         }
 
+        self.update_camera_matrix();
+    }
+
+    pub fn update_camera_matrix(&self) {
+        use std::f64::consts::PI as PI64;
         let tmp_cam = self.camera.lock();
         *self.view_vector.lock() = cgmath::Vector3::new(
             ((tmp_cam.yaw - PI64 / 2.0).cos() * -tmp_cam.pitch.cos()) as f32,
@@ -358,6 +381,8 @@ impl Renderer {
         physical_height: u32,
     ) {
         self.update_textures(delta);
+
+        let mut render_list: Vec<((i32, i32, i32), Arc<RwLock<ChunkBuffer>>)> = Vec::new();
 
         if world.is_some() {
             if self.chunk_render_data.lock().trans.is_some() {
@@ -416,8 +441,9 @@ impl Renderer {
                 .set_float(self.light_data.lock().sky_offset);
 
             let tmp_world = world.as_ref().unwrap().clone();
+            render_list = tmp_world.get_render_list_filtered(&*self.frustum.lock());
 
-            for (pos, info) in tmp_world.get_render_list() {
+            for (pos, info) in render_list.iter() {
                 if let Some(solid) = info.clone().read().solid.as_ref() {
                     if solid.count > 0 {
                         self.chunk_render_data.lock().chunk_shader.offset.set_int3(
@@ -440,12 +466,13 @@ impl Renderer {
             // Model rendering
             let light_data = self.light_data.lock();
             self.models.lock().draw(
-                *self.frustum.lock(), /*&self.frustum*/
+                *self.frustum.lock(),
                 &self.perspective_matrix.lock(),
                 &self.camera_matrix.lock(),
                 light_data.light_level,
                 light_data.sky_offset,
             );
+
             let tmp_world = world.as_ref().unwrap().clone();
 
             if let Some(clouds) = &mut *self.clouds.lock() {
@@ -534,8 +561,7 @@ impl Renderer {
         );
 
         if world.is_some() {
-            let tmp_world = world.as_ref().unwrap().clone();
-            for (pos, info) in tmp_world.get_render_list().iter().rev() {
+            for (pos, info) in render_list.iter().rev() {
                 if let Some(trans) = info.clone().read().trans.as_ref() {
                     if trans.count > 0 {
                         self.chunk_render_data
@@ -567,8 +593,43 @@ impl Renderer {
             trans.draw(&shader);
         }
 
-        gl::enable(gl::DEPTH_TEST);
-        gl::depth_mask(true);
+        if world.is_some() {
+            if let Some(chunk_data) = self.chunk_render_data.lock().trans.as_ref() {
+                chunk_data.main.bind_read();
+                gl::blit_framebuffer(
+                    0,
+                    0,
+                    physical_width as i32,
+                    physical_height as i32,
+                    0,
+                    0,
+                    physical_width as i32,
+                    physical_height as i32,
+                    gl::ClearFlags::Depth,
+                    gl::NEAREST,
+                );
+                gl::unbind_framebuffer();
+            }
+
+            gl::enable(gl::DEPTH_TEST);
+            gl::depth_func(gl::LESS_OR_EQUAL);
+            gl::depth_mask(true);
+
+            gl::active_texture(0);
+            self.texture_data
+                .lock()
+                .gl_texture
+                .bind(gl::TEXTURE_2D_ARRAY);
+            let light_data = self.light_data.lock();
+            self.models.lock().draw_collection(
+                model::FIRST_PERSON,
+                *self.frustum.lock(),
+                &self.perspective_matrix.lock(),
+                &self.camera_matrix.lock(),
+                light_data.light_level,
+                light_data.sky_offset,
+            );
+        }
 
         gl::disable(gl::MULTISAMPLE);
 
@@ -1215,7 +1276,7 @@ impl TextureManager {
 
     fn add_defaults(&mut self) {
         self.put_texture(
-            "leafish",
+            "rustcraft",
             "missing_texture",
             2,
             2,
@@ -1223,7 +1284,7 @@ impl TextureManager {
                 0, 0, 0, 255, 255, 0, 255, 255, 255, 0, 255, 255, 0, 0, 0, 255,
             ],
         );
-        self.put_texture("leafish", "solid", 1, 1, vec![255, 255, 255, 255]);
+        self.put_texture("rustcraft", "solid", 1, 1, vec![255, 255, 255, 255]);
     }
 
     fn process_skins(recv: Receiver<String>, reply: Sender<(String, Option<image::DynamicImage>)>) {
@@ -1355,7 +1416,7 @@ impl TextureManager {
         self.add_defaults();
 
         for name in map.keys() {
-            if let Some(n) = name.strip_prefix("leafish-dynamic:") {
+            if let Some(n) = name.strip_prefix("rustcraft-dynamic:") {
                 let (width, height, data) = {
                     let dynamic_texture = match self.dynamic_textures.get(n) {
                         Some(val) => val,
@@ -1365,7 +1426,7 @@ impl TextureManager {
                     let (width, height) = img.dimensions();
                     (width, height, img.to_rgba8().into_vec())
                 };
-                let new_tex = self.put_texture("leafish-dynamic", n, width, height, data);
+                let new_tex = self.put_texture("rustcraft-dynamic", n, width, height, data);
                 self.dynamic_textures.get_mut(n).unwrap().0 = new_tex;
             } else if !self.textures.contains_key(name) {
                 self.load_texture(name);
@@ -1378,7 +1439,7 @@ impl TextureManager {
         if let Some(skin) = self.skins.get(hash) {
             skin.fetch_add(1, Ordering::Relaxed);
         }
-        self.get_texture(&format!("leafish-dynamic:skin-{}", hash))
+        self.get_texture(&format!("rustcraft-dynamic:skin-{}", hash))
     }
 
     pub fn release_skin(&self, url: &str) {
@@ -1421,7 +1482,7 @@ impl TextureManager {
         if !self.skins.contains_key(&hash) {
             return;
         }
-        let name = format!("leafish-dynamic:skin-{}", hash);
+        let name = format!("rustcraft-dynamic:skin-{}", hash);
         let tex = self.get_texture(&name).unwrap();
         let rect = atlas::Rect {
             x: tex.x,
@@ -1560,7 +1621,7 @@ impl TextureManager {
                 interpolate,
                 current_frame: 0,
                 remaining_time: 0.0,
-                texture: self.get_texture("leafish:missing_texture").unwrap(),
+                texture: self.get_texture("rustcraft:missing_texture").unwrap(),
             });
         }
         None
@@ -1631,7 +1692,7 @@ impl TextureManager {
     }
 
     fn insert_texture_dummy(&mut self, plugin: &str, name: &str) -> Texture {
-        let missing = self.get_texture("leafish:missing_texture").unwrap();
+        let missing = self.get_texture("rustcraft:missing_texture").unwrap();
 
         let mut full_name = String::new();
         full_name.push_str(plugin);
@@ -1687,18 +1748,18 @@ impl TextureManager {
                 (width as f32) / (tex.width as f32),
                 (height as f32) / (tex.height as f32),
             );
-            let old_name = mem::replace(&mut tex.name, format!("leafish-dynamic:{}", name));
+            let old_name = mem::replace(&mut tex.name, format!("rustcraft-dynamic:{}", name));
             self.dynamic_textures.insert(name.to_owned(), (tex, img));
             // We need to rename the texture itself so that get_texture calls
             // work with the new name
             let mut old = self.textures.remove(&old_name).unwrap();
-            old.name = format!("leafish-dynamic:{}", name);
+            old.name = format!("rustcraft-dynamic:{}", name);
             t.name.clone_from(&old.name);
             self.textures
-                .insert(format!("leafish-dynamic:{}", name), old);
+                .insert(format!("rustcraft-dynamic:{}", name), old);
             t
         } else {
-            let tex = self.put_texture("leafish-dynamic", name, width as u32, height as u32, data);
+            let tex = self.put_texture("rustcraft-dynamic", name, width as u32, height as u32, data);
             self.dynamic_textures
                 .insert(name.to_owned(), (tex.clone(), img));
             tex
@@ -1744,6 +1805,10 @@ pub struct Texture {
 }
 
 impl Texture {
+    pub fn version(&self) -> usize {
+        self.version
+    }
+
     pub fn get_x(&self) -> usize {
         if self.is_rel {
             self.x + ((self.width as f32) * self.rel_x) as usize

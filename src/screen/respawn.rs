@@ -3,8 +3,8 @@ use crate::render::Renderer;
 use crate::screen::{Screen, ScreenSystem};
 use crate::ui;
 use crate::ui::{Container, ImageRef};
-use leafish_protocol::protocol::packet::play::serverbound::ClientStatus;
-use leafish_protocol::protocol::VarInt;
+use rustcraft_protocol::protocol::packet::play::serverbound::ClientStatus;
+use rustcraft_protocol::protocol::VarInt;
 use shared::Version;
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ impl super::Screen for Respawn {
     ) {
         let icon_scale = Hud::icon_scale(&renderer);
         let background = ui::ImageBuilder::new()
-            .texture("leafish:solid")
+            .texture("rustcraft:solid")
             .position(0.0, 0.0)
             .size(
                 renderer.screen_data.read().width as f64,

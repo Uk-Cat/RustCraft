@@ -22,7 +22,7 @@ use crate::ui::{Container, FormattedRef, HAttach, ImageRef, TextBuilder, TextRef
 use crate::Game;
 use crate::{ui, KeyCmp};
 use core::cmp;
-use leafish_protocol::format::Component;
+use rustcraft_protocol::format::Component;
 use parking_lot::RwLock;
 use shared::Version;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,7 +132,7 @@ impl super::Screen for Chat {
             self.background.push(
                 ui::ImageBuilder::new()
                     .draw_index(0)
-                    .texture("leafish:solid")
+                    .texture("rustcraft:solid")
                     .alignment(VAttach::Bottom, HAttach::Left)
                     .position(1.0 * scale, scale * 85.0 / 2.0)
                     .size(
@@ -147,7 +147,7 @@ impl super::Screen for Chat {
         self.background.push(
             ui::ImageBuilder::new()
                 .draw_index(0)
-                .texture("leafish:solid")
+                .texture("rustcraft:solid")
                 .alignment(VAttach::Bottom, HAttach::Left)
                 .position(1.0 * scale, 1.0 * scale)
                 .size(
@@ -179,7 +179,9 @@ impl super::Screen for Chat {
             self.rendered_messages.push(text);
             component_lines += lines;
         }*/
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         self.render_chat(renderer, ui_container);
+        ui_container.default_scale = None;
     }
 
     fn on_deactive(
@@ -201,6 +203,7 @@ impl super::Screen for Chat {
         _delta: f64,
     ) {
         let scale = Hud::icon_scale(&renderer);
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         if self.animation == 0 {
             self.animation = 20;
             self.animated_tex = Some(
@@ -245,8 +248,11 @@ impl super::Screen for Chat {
             self.context.dirty.store(false, Ordering::Release);
             self.rendered_messages.clear();
             self.background.clear();
+            ui_container.default_scale = Some(ui::Mode::Scaled);
             self.render_chat(renderer, ui_container);
+            ui_container.default_scale = None;
         }
+        ui_container.default_scale = None;
     }
 
     fn on_resize(
@@ -362,7 +368,7 @@ impl Chat {
             self.background.push(
                 ui::ImageBuilder::new()
                     .draw_index(0)
-                    .texture("leafish:solid")
+                    .texture("rustcraft:solid")
                     .alignment(VAttach::Bottom, HAttach::Left)
                     .position(1.0 * scale, scale * 85.0 / 2.0)
                     .size(
@@ -377,7 +383,7 @@ impl Chat {
         self.background.push(
             ui::ImageBuilder::new()
                 .draw_index(0)
-                .texture("leafish:solid")
+                .texture("rustcraft:solid")
                 .alignment(VAttach::Bottom, HAttach::Left)
                 .position(1.0 * scale, 1.0 * scale)
                 .size(

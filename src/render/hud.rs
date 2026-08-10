@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use leafish_protocol::format::Component;
+use rustcraft_protocol::format::Component;
 use log::debug;
 use parking_lot::RwLock;
 use rand::{thread_rng, Rng};
@@ -29,17 +29,22 @@ use crate::render;
 use crate::render::Renderer;
 use crate::screen::{Screen, ScreenSystem, ScreenType};
 use crate::server::Server;
+use crate::shared::Position;
+use crate::sysinfo;
 use crate::ui;
 use crate::ui::{Container, FormattedRef, HAttach, ImageRef, TextRef, VAttach};
+use crate::world::block;
 use crate::{format, screen, Game};
-use leafish_protocol::protocol::packet::play::serverbound::HeldItemChange;
-use leafish_protocol::types::GameMode;
+use rustcraft_protocol::protocol::packet::play::serverbound::HeldItemChange;
+use rustcraft_protocol::types::GameMode;
 use std::sync::atomic::AtomicBool;
 
 use instant::Instant;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
 // Textures can be found at: assets/minecraft/textures/gui/icons.png
+
+const MAX_FRAME_TIMES: usize = 5000;
 
 // TODO: read out "regen: bool"
 #[allow(dead_code)]
@@ -48,6 +53,14 @@ pub struct HudContext {
     pub debug: bool,
     fps: u32,
     dirty_debug: bool,
+    pub show_fps: bool,
+    frame_times: Vec<f64>,
+    last_fps_recompute: Instant,
+    fps_current: u32,
+    fps_avg: u32,
+    fps_1pct_low: u32,
+    fps_01pct_low: u32,
+    fps_dirty: bool,
     hardcore: bool,  // TODO: Update this!
     wither: bool,    // TODO: Update this!
     poison: bool,    // TODO: Update this!
@@ -94,6 +107,14 @@ impl HudContext {
             debug: false,
             fps: 0,
             dirty_debug: false,
+            show_fps: false,
+            frame_times: Vec::with_capacity(MAX_FRAME_TIMES),
+            last_fps_recompute: Instant::now(),
+            fps_current: 0,
+            fps_avg: 0,
+            fps_1pct_low: 0,
+            fps_01pct_low: 0,
+            fps_dirty: true,
             hardcore: false,
             wither: false,
             poison: false,
@@ -190,6 +211,43 @@ impl HudContext {
         }
     }
 
+    pub fn push_frame_time(&mut self, time_secs: f64) {
+        self.frame_times.push(time_secs);
+        if self.frame_times.len() > MAX_FRAME_TIMES {
+            self.frame_times.remove(0);
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.last_fps_recompute).as_secs_f64() >= 0.5 {
+            self.last_fps_recompute = now;
+            self.recompute_fps_stats();
+        }
+    }
+
+    fn recompute_fps_stats(&mut self) {
+        if self.frame_times.is_empty() {
+            return;
+        }
+        let len = self.frame_times.len();
+
+        let last = self.frame_times[len - 1];
+        self.fps_current = (1.0 / last.max(0.000001)) as u32;
+
+        let avg_time = self.frame_times.iter().sum::<f64>() / len as f64;
+        self.fps_avg = (1.0 / avg_time.max(0.000001)) as u32;
+
+        let mut sorted = self.frame_times.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let idx_1pct = ((len as f64) * 0.99) as usize;
+        self.fps_1pct_low = (1.0 / sorted[idx_1pct.min(len - 1)].max(0.000001)) as u32;
+
+        let idx_01pct = ((len as f64) * 0.999) as usize;
+        self.fps_01pct_low = (1.0 / sorted[idx_01pct.min(len - 1)].max(0.000001)) as u32;
+
+        self.fps_dirty = true;
+    }
+
     pub fn update_game_mode(&mut self, game_mode: GameMode) {
         self.game_mode = game_mode;
         self.dirty_game_mode = true;
@@ -229,6 +287,7 @@ pub struct Hud {
     slot_text_elements: Vec<TextRef>,
     slot_index_elements: Vec<ImageRef>,
     debug_elements: Vec<TextRef>,
+    fps_elements: Vec<TextRef>,
     chat_elements: Vec<FormattedRef>,
     chat_background_elements: Vec<ImageRef>,
     action_bar_text_elements: Option<FormattedRef>,
@@ -253,6 +312,7 @@ impl Hud {
             slot_text_elements: vec![],
             slot_index_elements: vec![],
             debug_elements: vec![],
+            fps_elements: vec![],
             chat_elements: vec![],
             chat_background_elements: vec![],
             action_bar_text_elements: None,
@@ -270,6 +330,7 @@ impl Screen for Hud {
         renderer: Arc<Renderer>,
         ui_container: &mut Container,
     ) {
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         if self.hud_context.read().enabled {
             self.render_slots(&renderer, ui_container);
             self.render_slots_items(&renderer, ui_container);
@@ -286,6 +347,7 @@ impl Screen for Hud {
                 self.render_breath(&renderer, ui_container);
             }
         }
+        ui_container.default_scale = None;
     }
 
     fn deinit(
@@ -305,6 +367,7 @@ impl Screen for Hud {
         self.slot_text_elements.clear();
         self.slot_index_elements.clear();
         self.debug_elements.clear();
+        self.fps_elements.clear();
         self.chat_elements.clear();
         self.chat_background_elements.clear();
     }
@@ -344,12 +407,22 @@ impl Screen for Hud {
             self.last_enabled = true;
             return;
         }
+        ui_container.default_scale = Some(ui::Mode::Scaled);
         if self.hud_context.read().debug {
             self.render_debug(&renderer, ui_container);
             self.last_debug_enabled = true;
         } else if self.last_debug_enabled {
             self.debug_elements.clear();
             self.last_debug_enabled = false;
+        }
+        if self.hud_context.read().show_fps && !self.hud_context.read().debug {
+            if self.hud_context.read().fps_dirty {
+                self.hud_context.write().fps_dirty = false;
+                self.fps_elements.clear();
+                self.render_fps_counter(&renderer, ui_container);
+            }
+        } else if !self.fps_elements.is_empty() {
+            self.fps_elements.clear();
         }
         let game_mode = self.hud_context.read().game_mode;
         if self.hud_context.clone().read().dirty_game_mode {
@@ -437,6 +510,7 @@ impl Screen for Hud {
             self.render_chat(&renderer, ui_container);
             self.render_chat = false;
         }
+        ui_container.default_scale = None;
     }
 
     fn on_scroll(&mut self, _: f64, y: f64) {
@@ -1012,20 +1086,141 @@ impl Hud {
         self.hud_context.write().dirty_breath = false;
     }
 
+    /// Compass direction the camera is looking towards, derived from the camera
+    /// forward vector (yaw is in radians, 0 = South/+Z as in Minecraft).
+    pub fn facing_from_yaw(yaw: f64) -> &'static str {
+        let forward_x = (yaw - std::f64::consts::FRAC_PI_2).cos();
+        let forward_z = -(yaw - std::f64::consts::FRAC_PI_2).sin();
+        if forward_x.abs() > forward_z.abs() {
+            if forward_x > 0.0 {
+                "East"
+            } else {
+                "West"
+            }
+        } else if forward_z > 0.0 {
+            "South"
+        } else {
+            "North"
+        }
+    }
+
     pub fn render_debug(&mut self, renderer: &Arc<Renderer>, ui_container: &mut Container) {
         let hud_context = self.hud_context.read();
         let icon_scale = Hud::icon_scale(renderer);
         let scale = icon_scale / 2.0;
-        self.debug_elements.push(
+
+        let camera = renderer.camera.lock();
+        let pos = camera.pos;
+        let yaw = camera.yaw;
+        let pitch = camera.pitch;
+        drop(camera);
+
+        let facing = Self::facing_from_yaw(yaw);
+        let block_pos = Position {
+            x: pos.x.floor() as i32,
+            y: pos.y.floor() as i32,
+            z: pos.z.floor() as i32,
+        };
+
+        let mut lines = vec![
+            format!("FPS: {}", hud_context.fps_current),
+            format!("XYZ: {:.1} / {:.1} / {:.1}", pos.x, pos.y, pos.z),
+            format!(
+                "Chunk: {} / {}",
+                block_pos.x >> 4,
+                block_pos.z >> 4
+            ),
+            format!("Facing: {} ({:.1} / {:.1})", facing, yaw.to_degrees(), pitch.to_degrees()),
+        ];
+
+        if let Some(server) = hud_context.server.as_ref() {
+            lines.push(format!("Biome: {}", server.world.get_biome(block_pos).name()));
+            lines.push(format!("Dimension: {}", server.world.dimension.load().name()));
+            lines.push(format!("Local Difficulty: {:.2}", server.local_difficulty()));
+            lines.push(format!(
+                "Difficulty: {}",
+                match server.get_difficulty() {
+                    0 => "Peaceful",
+                    1 => "Easy",
+                    2 => "Normal",
+                    _ => "Hard",
+                }
+            ));
+
+            let info = server.target_info.read();
+            let blk = info.target_block();
+            let bp = info.target_pos();
+            if !matches!(*blk, block::Block::Air {}) {
+                let dbg = format!("{:?}", blk);
+                if let Some(paren) = dbg.find(" {") {
+                    let name = &dbg[..paren];
+                    let rest = &dbg[paren + 2..dbg.len() - 1];
+                    lines.push(String::new());
+                    lines.push(name.to_string());
+                    for pair in rest.split(", ") {
+                        lines.push(format!("  {}", pair));
+                    }
+                    lines.push(format!("[{} {} {}]", bp.x, bp.y, bp.z));
+                } else {
+                    lines.push(String::new());
+                    lines.push(dbg);
+                    lines.push(format!("[{} {} {}]", bp.x, bp.y, bp.z));
+                }
+            }
+        }
+        drop(hud_context);
+
+        let mem_used = sysinfo::memory_used();
+        let mem_total = sysinfo::memory_total();
+        lines.push(format!(
+            "Mem: {:.0} / {:.0} MiB ({:.0}%)",
+            mem_used as f64 / 1048576.0,
+            mem_total as f64 / 1048576.0,
+            if mem_total > 0 {
+                mem_used as f64 / mem_total as f64 * 100.0
+            } else {
+                0.0
+            }
+        ));
+        lines.push(format!("CPU: {:.1}%", sysinfo::cpu_usage_percent()));
+
+        self.debug_elements.clear();
+        for (i, line) in lines.iter().enumerate() {
+            self.debug_elements.push(
+                ui::TextBuilder::new()
+                    .draw_index(HUD_PRIORITY)
+                    .alignment(VAttach::Top, HAttach::Left)
+                    .scale_x(scale)
+                    .scale_y(scale)
+                    .position(icon_scale, icon_scale + i as f64 * 18.0 * scale)
+                    .text(line.clone())
+                    .colour((255, 255, 255, 255))
+                    .shadow(false)
+                    .create(ui_container),
+            );
+        }
+    }
+
+    fn render_fps_counter(&mut self, renderer: &Arc<Renderer>, ui_container: &mut Container) {
+        let hud_context = self.hud_context.read();
+        let icon_scale = Hud::icon_scale(renderer);
+        let scale = icon_scale / 2.0;
+        self.fps_elements.push(
             ui::TextBuilder::new()
                 .draw_index(HUD_PRIORITY)
                 .alignment(VAttach::Top, HAttach::Left)
                 .scale_x(scale)
                 .scale_y(scale)
                 .position(icon_scale, icon_scale)
-                .text(format!("FPS: {}", hud_context.fps))
-                .colour((0, 102, 204, 255))
-                .shadow(false)
+                .text(format!(
+                    "FPS: {} | Avg: {}\n1% low: {} | 0.1% low: {}",
+                    hud_context.fps_current,
+                    hud_context.fps_avg,
+                    hud_context.fps_1pct_low,
+                    hud_context.fps_01pct_low,
+                ))
+                .colour((255, 255, 255, 255))
+                .shadow(true)
                 .create(ui_container),
         );
     }
@@ -1059,7 +1254,7 @@ impl Hud {
                 self.chat_background_elements.push(
                     ui::ImageBuilder::new()
                         .draw_index(HUD_PRIORITY + 1)
-                        .texture("leafish:solid")
+                        .texture("rustcraft:solid")
                         .alignment(VAttach::Bottom, HAttach::Left)
                         .position(1.0 * scale, scale * 85.0 / 2.0)
                         .size(
@@ -1133,8 +1328,18 @@ impl Hud {
     ) -> (ImageRef, Option<TextRef>) {
         let icon_scale = Hud::icon_scale(renderer);
         let textures = item.material.texture_locations();
-        let texture =
-            if let Some(tex) = Renderer::get_texture_optional(&renderer.textures, &textures.0) {
+
+        // Try 3D baked texture for block items
+        let texture_name = if let Some(baked_name) = renderer
+            .item_renderer
+            .lock()
+            .get_or_bake(&item.material)
+        {
+            baked_name
+        } else {
+            let texture = if let Some(tex) =
+                Renderer::get_texture_optional(&renderer.textures, &textures.0)
+            {
                 if tex.dummy {
                     textures.1
                 } else {
@@ -1143,13 +1348,16 @@ impl Hud {
             } else {
                 textures.1
             };
+            format!("minecraft:{}", texture)
+        };
+
         let item_image = ui::ImageBuilder::new()
             .draw_index(HUD_PRIORITY)
             .texture_coords((0.0, 0.0, 256.0, 256.0))
             .position(x, y)
             .alignment(ui::VAttach::Bottom, ui::HAttach::Center)
             .size(icon_scale * 16.0, icon_scale * 16.0)
-            .texture(format!("minecraft:{}", texture))
+            .texture(texture_name)
             .create(ui_container);
 
         let text = if item.stack.count != 1 {

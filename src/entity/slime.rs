@@ -7,7 +7,7 @@ use crate::server::RendererResource;
 use bevy_ecs::prelude::*;
 use cgmath::{Decomposed, Matrix4, Point3, Quaternion, Rad, Rotation3, Vector3};
 use collision::Aabb3;
-use leafish_protocol::format::Component;
+use rustcraft_protocol::format::Component;
 
 #[derive(Component)]
 pub struct SlimeModel {

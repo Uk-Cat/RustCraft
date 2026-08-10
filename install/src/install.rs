@@ -26,17 +26,17 @@ pub mod mojang {
     use crate::install::{adjust_perms, mk_dir, BOOTSTRAP_BIN, BOOTSTRAP_JAR};
 
     // all of these are expected to be prepended with ".minecraft"
-    const DIR_PATH: &str = "/versions/Leafish/";
-    const DESC_JSON_PATH: &str = "/versions/Leafish/Leafish.json";
-    const JAR_PATH: &str = "/versions/Leafish/Leafish.jar";
+    const DIR_PATH: &str = "/versions/RustCraft/";
+    const DESC_JSON_PATH: &str = "/versions/RustCraft/RustCraft.json";
+    const JAR_PATH: &str = "/versions/RustCraft/RustCraft.jar";
     const PROFILES_JSON_PATH: &str = "/launcher_profiles.json";
-    const LIBRARY_DIR_PATH: &str = "/libraries/de/leafish/Leafish/Jar/";
-    const LIBRARY_PATH: &str = "/libraries/de/leafish/Leafish/Jar/Leafish-Jar.jar";
+    const LIBRARY_DIR_PATH: &str = "/libraries/de/rustcraft/RustCraft/Jar/";
+    const LIBRARY_PATH: &str = "/libraries/de/rustcraft/RustCraft/Jar/RustCraft-Jar.jar";
 
     #[cfg(target_os = "windows")]
-    const BOOTSTRAP_BIN_PATH: &str = "/versions/Leafish/bootstrap.exe";
+    const BOOTSTRAP_BIN_PATH: &str = "/versions/RustCraft/bootstrap.exe";
     #[cfg(not(target_os = "windows"))]
-    const BOOTSTRAP_BIN_PATH: &str = "/versions/Leafish/bootstrap";
+    const BOOTSTRAP_BIN_PATH: &str = "/versions/RustCraft/bootstrap";
 
     // FIXME: add cli that allows reinstalling, uninstalling, installing and getting info
 
@@ -129,7 +129,7 @@ pub mod mojang {
         let json_path = format!("{}{}", prefix, DESC_JSON_PATH);
         let jar_path = format!("{}{}", prefix, JAR_PATH);
         if Path::new(&json_path).exists() && Path::new(&jar_path).exists() {
-            println!("[Info] [Official] Leafish is already installed");
+            println!("[Info] [Official] RustCraft is already installed");
             return Ok(false);
         }
         // cleanup old files
@@ -150,13 +150,13 @@ pub mod mojang {
         println!("[Info] [Official] Creating json...");
         let mut json = File::create_new(&json_path)?;
         json.write_all(serde_json::to_string_pretty(&Description {
-            id: "Leafish".to_string(),
+            id: "RustCraft".to_string(),
             time: "2020-01-01T00:00:00+02:00".to_string(), // TODO: use time now
             release_time: "2020-01-01T00:00:00+02:00".to_string(), // TODO: use actual latest release time
             ty: "release".to_string(),
-            libraries: vec![Library { name: "de.leafish:Leafish:Jar".to_string() }], // we need nobody, but ourselves ;)
-            main_class: "de.leafish.Main".to_string(),
-            minecraft_arguments: "--username ${auth_player_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userProperties ${user_properties} --userType ${user_type} --path ./versions/Leafish/ --client-jar ../%client_ver/%client_ver.jar --launcher official".to_string(),
+            libraries: vec![Library { name: "de.rustcraft:RustCraft:Jar".to_string() }], // we need nobody, but ourselves ;)
+            main_class: "de.rustcraft.Main".to_string(),
+            minecraft_arguments: "--username ${auth_player_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userProperties ${user_properties} --userType ${user_type} --path ./versions/RustCraft/ --client-jar ../%client_ver/%client_ver.jar --launcher official".to_string(),
             asset_index: AssetIndex { // FIXME: don't choose one version statically
                 id: "1.19".to_string(),
                 sha1: "a9c8b05a8082a65678beda6dfa2b8f21fa627bce".to_string(),
@@ -206,13 +206,13 @@ pub mod mojang {
         let now = now.format("%Y-%m-%dT%H:%M:%S.000Z");
 
         profiles.profiles.insert(
-            "Leafish".to_string(),
+            "RustCraft".to_string(),
             Profile {
                 created: Some(now.to_string()),
                 icon: include_str!("../resources/icon.txt").to_string(),
                 last_used: now.to_string(),
-                last_version_id: Some("Leafish".to_string()),
-                name: "Leafish".to_string(),
+                last_version_id: Some("RustCraft".to_string()),
+                name: "RustCraft".to_string(),
                 ty: "custom".to_string(),
             },
         );
@@ -243,24 +243,24 @@ pub mod prism {
     use crate::install::{adjust_perms, mk_dir, BOOTSTRAP_BIN, BOOTSTRAP_JAR};
 
     const ICONS_DIR_PATH: &str = "/icons";
-    const ICON_PATH: &str = "/icons/leafish.png";
-    const INSTANCE_DIR_PATH: &str = "/instances/Leafish";
-    const CFG_PATH: &str = "/instances/Leafish/instance.cfg";
-    const PACK_PATH: &str = "/instances/Leafish/mmc-pack.json";
-    const META_DIR_PATH: &str = "/meta/de.leafish";
-    const META_PATH: &str = "/meta/de.leafish/Leafish.json";
-    const LIB_DIR_PATH: &str = "/libraries/de/leafish/Leafish/v1.0.0";
-    const LIB_PATH: &str = "/libraries/de/leafish/Leafish/v1.0.0/Leafish.jar";
+    const ICON_PATH: &str = "/icons/rustcraft.png";
+    const INSTANCE_DIR_PATH: &str = "/instances/RustCraft";
+    const CFG_PATH: &str = "/instances/RustCraft/instance.cfg";
+    const PACK_PATH: &str = "/instances/RustCraft/mmc-pack.json";
+    const META_DIR_PATH: &str = "/meta/de.rustcraft";
+    const META_PATH: &str = "/meta/de.rustcraft/RustCraft.json";
+    const LIB_DIR_PATH: &str = "/libraries/de/rustcraft/RustCraft/v1.0.0";
+    const LIB_PATH: &str = "/libraries/de/rustcraft/RustCraft/v1.0.0/RustCraft.jar";
 
     #[cfg(not(target_os = "windows"))]
-    const BOOTSTRAP_BIN_PATH: &str = "/instances/Leafish/bootstrap";
+    const BOOTSTRAP_BIN_PATH: &str = "/instances/RustCraft/bootstrap";
     #[cfg(target_os = "windows")]
-    const BOOTSTRAP_BIN_PATH: &str = "/instances/Leafish/bootstrap.exe";
+    const BOOTSTRAP_BIN_PATH: &str = "/instances/RustCraft/bootstrap.exe";
 
     const DEFAULT_CFG: &str = "[General]
     ConfigVersion=1.2
-    iconKey=leafish
-    name=Leafish
+    iconKey=rustcraft
+    name=RustCraft
     InstanceType=OneSix";
 
     pub fn setup(prefix: &str) -> anyhow::Result<bool> {
@@ -284,7 +284,7 @@ pub mod prism {
         let icon_path = format!("{}{}", prefix, ICON_PATH);
         if !Path::new(&icon_path).exists() {
             println!("[Info] [Prism] Copying icon...");
-            fs::write(&icon_path, include_bytes!("../resources/leafish-icon.png"))?;
+            fs::write(&icon_path, include_bytes!("../resources/rustcraft-icon.png"))?;
         }
 
         let cfg_path = format!("{}{}", prefix, CFG_PATH);
@@ -296,8 +296,8 @@ pub mod prism {
             serde_json::to_string_pretty(&PackDesc {
                 components: vec![Component {
                     important: Some(true),
-                    uid: "de.leafish".to_string(),
-                    version: "Leafish".to_string(),
+                    uid: "de.rustcraft".to_string(),
+                    version: "RustCraft".to_string(),
                     cached_name: None,
                     cached_requires: None,
                     cached_version: None,
@@ -335,7 +335,7 @@ pub mod prism {
             compatible_java_majors: vec![8,9,10,11,12,13,14,15,16,17],
             format_version: 1,
             libraries: vec![],
-            main_class: "de.leafish.Main".to_string(),
+            main_class: "de.rustcraft.Main".to_string(),
             main_jar: MainJar {
                 downloads: Download {
                     artifact: Some(Artifact {
@@ -345,10 +345,10 @@ pub mod prism {
                         // TODO: somehow use latest: https://github.com/Lea-fish/Releases/releases/latest/download/bootstrap.jar
                     }),
                 },
-                name: "de.leafish:Leafish:v1.0.0".to_string(),
+                name: "de.rustcraft:RustCraft:v1.0.0".to_string(),
             },
             minecraft_arguments: "--username ${auth_player_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userProperties ${user_properties} --userType ${user_type} --path ../ --client-jar ../../libraries/com/mojang/minecraft/%client_ver/minecraft-%client_ver-client.jar --launcher prism".to_string(),
-            name: "Leafish".to_string(),
+            name: "RustCraft".to_string(),
             order: 0,
             release_time: now.to_string(),
             requires: vec![],

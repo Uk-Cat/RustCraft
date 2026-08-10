@@ -114,7 +114,7 @@ impl Console {
         };
         if self.elements.is_none() {
             let background = ui::ImageBuilder::new()
-                .texture("leafish:solid")
+                .texture("rustcraft:solid")
                 .position(0.0, self.position)
                 .size(w, 220.0)
                 .colour((0, 0, 0, 180))

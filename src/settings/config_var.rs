@@ -35,6 +35,7 @@ pub enum SettingType {
 pub enum IntSetting {
     MaxFps,
     FOV,
+    GuiScale,
     MasterVolume,
     DefaultProtocolVersion,
 }
@@ -42,6 +43,7 @@ pub enum IntSetting {
 #[derive(PartialEq, PartialOrd, Hash, Eq, Ord, Clone, Copy)]
 pub enum BoolSetting {
     Vsync,
+    ShowFps,
     CapeVisible,
     JacketVisible,
     RightSleeveVisible,
@@ -169,6 +171,14 @@ impl SettingStore {
                         continue;
                     };
                     if setting.serializable {
+                        // mouse_sens used to be stored as a 0-10x multiplier.
+                        // It is now a percentage (1% to 200%), so migrate old values.
+                        let val = match (name.as_str(), val) {
+                            ("mouse_sens", SettingValue::Float(f)) if f <= 10.0 => {
+                                SettingValue::Float((f * 100.0).clamp(1.0, 200.0))
+                            }
+                            (_, v) => v,
+                        };
                         store.get_mut(s_type).unwrap().value = val;
                     }
                 } else {

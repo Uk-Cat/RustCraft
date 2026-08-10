@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use log;
 use std::{fmt, str::FromStr};
 
 use crate::translate;
@@ -232,23 +233,21 @@ impl Component {
                 components
             }
             (Some(translate), Some(text), None) => {
-                format!("ERR trans: {}, text: {}", translate, text);
-                todo!()
+                log::warn!("Unhandled chat: translate={}, text={}", translate, text);
+                Component::from_legacy_str(text, &modifier).list
             }
             (Some(translate), Some(text), Some(extra)) => {
-                format!(
-                    "ERR trans: {}, text: {}, extra{:?}, ",
-                    translate, text, extra
-                );
-                todo!()
+                log::warn!("Unhandled chat: translate={}, text={}", translate, text);
+                let mut component = Component::from_legacy_str(text, &modifier).list;
+                component.append(&mut Component::get_string_from_extra(extra, &modifier).list);
+                component
             }
             (Some(text), None, Some(extra)) => {
-                format!("ERR trans: {}, extra: {:?}", text, extra);
-                todo!()
+                log::warn!("Unhandled chat: translate={}, extra present", text);
+                Component::get_string_from_extra(extra, &modifier).list
             }
             (None, None, Some(extra)) => {
-                format!("ERR extra: {:?}", extra);
-                todo!()
+                Component::get_string_from_extra(extra, &modifier).list
             }
             (None, Some(text), Some(extra)) => {
                 let mut component = Component::from_legacy_str(text, &modifier).list;

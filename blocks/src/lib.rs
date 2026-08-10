@@ -2,7 +2,7 @@
 #![allow(clippy::identity_op)]
 #![allow(clippy::collapsible_if)]
 
-extern crate leafish_shared as shared;
+extern crate rustcraft_shared as shared;
 
 use crate::shared::{Axis, Direction, Position, Version};
 use cgmath::Point3;
@@ -73,6 +73,30 @@ impl VanillaIDMap {
                     }
                 }
             }
+        }
+    }
+
+    pub fn by_block(
+        &self,
+        block: Block,
+        modded_block_ids: &HashMap<usize, String>,
+    ) -> Vec<usize> {
+        match &self.mapping {
+            IDMapKind::Flat(blocks) => {
+                let (ns, name) = block.get_model();
+                blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| {
+                        let (bns, bname) = b.get_model();
+                        bns == ns && bname == name
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+            IDMapKind::Hierarchical => (0..256 * 16)
+                .filter(|&id| self.by_vanilla_id(id, modded_block_ids) == block)
+                .collect(),
         }
     }
 }

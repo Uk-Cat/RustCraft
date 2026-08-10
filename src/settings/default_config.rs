@@ -21,6 +21,15 @@ pub fn default_vars() -> Vec<(SettingType, ConfigVar)> {
             },
         ),
         (
+            SettingType::Int(IntSetting::GuiScale),
+            ConfigVar {
+                name: "gui_scale",
+                description: "Scale of the GUI. 1 to 4 scales the interface by a fixed factor",
+                serializable: true,
+                value: SettingValue::Num(3),
+            },
+        ),
+        (
             SettingType::Bool(BoolSetting::Vsync),
             ConfigVar {
                 name: "vsync",
@@ -35,7 +44,7 @@ pub fn default_vars() -> Vec<(SettingType, ConfigVar)> {
                 name: "mouse_sens",
                 description: "Mouse Sensitivity",
                 serializable: true,
-                value: SettingValue::Float(1.0),
+                value: SettingValue::Float(100.0),
             },
         ),
         (
@@ -45,6 +54,15 @@ pub fn default_vars() -> Vec<(SettingType, ConfigVar)> {
                 description: "Main volume control",
                 serializable: true,
                 value: SettingValue::Num(100),
+            },
+        ),
+        (
+            SettingType::Bool(BoolSetting::ShowFps),
+            ConfigVar {
+                name: "show_fps",
+                description: "Toggle the FPS counter in the top left corner",
+                serializable: true,
+                value: SettingValue::Bool(false),
             },
         ),
         (
@@ -134,7 +152,7 @@ pub fn default_vars() -> Vec<(SettingType, ConfigVar)> {
                 name: "background",
                 description: "Select the background image",
                 serializable: true,
-                value: SettingValue::String("leafish:gui/background".to_owned()),
+                value: SettingValue::String("rustcraft:gui/background".to_owned()),
             },
         ),
         (

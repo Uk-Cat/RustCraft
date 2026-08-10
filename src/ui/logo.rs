@@ -1,10 +1,12 @@
 use crate::render;
 use crate::resources;
 use crate::ui;
+use image::GenericImageView;
 use instant::Instant;
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use std::f64::consts;
+use std::io::Read;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -25,73 +27,51 @@ impl Logo {
         resources: Arc<RwLock<resources::Manager>>,
         ui_container: &mut ui::Container,
     ) -> Logo {
-        let logo_str = {
-            let res = resources.read();
-            let mut logo = res.open("leafish", "logo/logo.txt").unwrap();
-            let mut logo_str = String::new();
-            logo.read_to_string(&mut logo_str).unwrap();
-            logo_str
-        };
+        Logo::new_sized(resources, ui_container, 40.0, 128.0)
+    }
 
+    pub fn new_sized(
+        resources: Arc<RwLock<resources::Manager>>,
+        ui_container: &mut ui::Container,
+        y: f64,
+        height: f64,
+    ) -> Logo {
         let shadow_batch = ui::BatchBuilder::new()
-            .position(0.0, 8.0)
+            .position(0.0, y)
             .size(100.0, 100.0)
             .alignment(ui::VAttach::Top, ui::HAttach::Center)
             .create(ui_container);
         let layer0 = ui::BatchBuilder::new()
-            .position(0.0, 8.0)
+            .position(0.0, y)
             .size(100.0, 100.0)
             .draw_index(1)
             .alignment(ui::VAttach::Top, ui::HAttach::Center)
             .create(ui_container);
 
-        let mut row = 0;
-        for line in logo_str.lines() {
-            if line.is_empty() {
-                continue;
-            }
-            for (i, c) in line.chars().enumerate() {
-                if c == ' ' {
-                    continue;
-                }
-                let x = i * 4;
-                let y = row * 8;
-                let (r, g, b) = if c == ':' {
-                    (255, 255, 255)
-                } else {
-                    (170, 170, 170)
-                };
-                ui::ImageBuilder::new()
-                    .texture("leafish:solid")
-                    .position((x + 2) as f64, (y + 4) as f64)
-                    .size(4.0, 8.0)
-                    .colour((0, 0, 0, 100))
-                    .attach(&mut *shadow_batch.borrow_mut());
+        // The title is loaded as the "rustcraft-dynamic:gui/title" texture,
+        // registered at startup in main.rs from resources/assets/rustcraft/textures/gui/title.png.
+        // Size it using the image's aspect ratio.
+        let img = image::load_from_memory(include_bytes!("../../resources/assets/rustcraft/textures/gui/title.png")).unwrap();
+        let (img_w, img_h) = img.dimensions();
+        let width = height * (img_w as f64) / (img_h as f64);
 
-                ui::ImageBuilder::new()
-                    .texture("minecraft:block/oak_planks")
-                    .position(x as f64, y as f64)
-                    .size(4.0, 8.0)
-                    .texture_coords((
-                        (x % 16) as f64 / 16.0 * 256.0,
-                        (y % 16) as f64 / 16.0 * 256.0,
-                        4.0 / 16.0 * 256.0,
-                        8.0 / 16.0 * 256.0,
-                    ))
-                    .colour((r, g, b, 255))
-                    .attach(&mut *layer0.borrow_mut());
+        ui::ImageBuilder::new()
+            .texture("rustcraft-dynamic:gui/title")
+            .position(2.0, 4.0)
+            .size(width, height)
+            .colour((0, 0, 0, 100))
+            .attach(&mut *shadow_batch.borrow_mut());
 
-                let width = (x + 4) as f64;
-                if shadow_batch.borrow().width < width {
-                    shadow_batch.borrow_mut().width = width;
-                    layer0.borrow_mut().width = width;
-                }
-            }
-            row += 1;
-        }
+        ui::ImageBuilder::new()
+            .texture("rustcraft-dynamic:gui/title")
+            .position(0.0, 0.0)
+            .size(width, height)
+            .attach(&mut *layer0.borrow_mut());
 
-        shadow_batch.borrow_mut().height = row as f64 * 8.0;
-        layer0.borrow_mut().height = row as f64 * 8.0;
+        shadow_batch.borrow_mut().width = width;
+        shadow_batch.borrow_mut().height = height;
+        layer0.borrow_mut().width = width;
+        layer0.borrow_mut().height = height;
 
         let mut text_strings = vec![];
         {
@@ -113,15 +93,14 @@ impl Logo {
             .text("")
             .position(0.0, -8.0)
             .colour((255, 255, 0, 255))
-            .rotation(-consts::PI / 8.0)
             .alignment(ui::VAttach::Bottom, ui::HAttach::Right)
             .draw_index(1)
             .create(&mut *layer0.borrow_mut());
 
         let width = txt.borrow().width;
         let mut text_base_scale = 300.0 / width;
-        if text_base_scale > 1.0 {
-            text_base_scale = 1.0;
+        if text_base_scale > 1.2 {
+            text_base_scale = 1.2;
         }
         txt.borrow_mut().x = (-width / 2.0) * text_base_scale;
         let text_orig_x = txt.borrow().x;
@@ -150,8 +129,8 @@ impl Logo {
                 .clone_from(&self.text_strings[text_index as usize]);
             let width = (renderer.ui.lock().size_of_string(&text.text) + 2.0) * text.scale_x;
             self.text_base_scale = 300.0 / width;
-            if self.text_base_scale > 1.0 {
-                self.text_base_scale = 1.0;
+            if self.text_base_scale > 1.2 {
+                self.text_base_scale = 1.2;
             }
             text.x = (-width / 2.0) * self.text_base_scale;
             self.text_orig_x = text.x;
@@ -163,8 +142,8 @@ impl Logo {
             offset = 2.0 - offset;
         }
         offset = ((offset * consts::PI).cos() + 1.0) / 2.0;
-        text.scale_x = (0.7 + (offset / 3.0)) * self.text_base_scale;
-        text.scale_y = (0.7 + (offset / 3.0)) * self.text_base_scale;
+        text.scale_x = (0.9 + (offset / 4.0)) * self.text_base_scale;
+        text.scale_y = (0.9 + (offset / 4.0)) * self.text_base_scale;
         let scale = text.scale_x;
         text.x = self.text_orig_x * scale * self.text_base_scale;
     }

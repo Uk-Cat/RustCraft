@@ -1,16 +1,16 @@
 [package]
-name = "leafish"
+name = "rustcraft"
 version = "0.1.0"
 authors = [ "Thinkofdeath <thinkofdeath@spigotmc.org>", "iceiix <ice_ix@protonmail.ch>", "terrarier2111" ]
 edition = "2018"
 resolver = "2"
 description = "Multi-protocol multi-platform Minecraft-compatible client"
-repository = "https://github.com/Lea-fish/Leafish"
+repository = "https://github.com/Lea-fish/RustCraft"
 license = "MIT/Apache-2.0"
 
 [package.metadata.bundle]
-name = "Leafish"
-identifier = "com.github.Lea-fish.Leafish"
+name = "RustCraft"
+identifier = "com.github.Lea-fish.RustCraft"
 icon = ["resources/icon*.png"]
 category = "Game"
 osx_minimum_system_version = "10.14"
@@ -66,18 +66,18 @@ glutin-winit = "0.4"
 arc-swap = "1.7.0"
 # phf = "0.11"
 
-[dependencies.leafish_resources]
+[dependencies.rustcraft_resources]
 path = "./resources"
 version = "0"
 
-[dependencies.leafish_blocks]
+[dependencies.rustcraft_blocks]
 path = "./blocks"
 version = "0"
 
-[dependencies.leafish_shared]
+[dependencies.rustcraft_shared]
 path = "./shared"
 version = "0"
 
-[dependencies.leafish_protocol]
+[dependencies.rustcraft_protocol]
 path = "./protocol"
 version = "0"

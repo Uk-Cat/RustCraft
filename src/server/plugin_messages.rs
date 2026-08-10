@@ -1,7 +1,7 @@
 use crate::protocol::packet::play::serverbound::PluginMessageServerbound;
 use crate::protocol::packet::play::serverbound::PluginMessageServerbound_i16;
 use crate::protocol::{Serializable, VarShort};
-use leafish_protocol::protocol::Conn;
+use rustcraft_protocol::protocol::Conn;
 
 pub struct Brand {
     pub brand: String,

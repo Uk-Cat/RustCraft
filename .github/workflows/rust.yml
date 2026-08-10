@@ -17,14 +17,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target-name: leafish
-            release-name: leafish-linux
+            target-name: rustcraft
+            release-name: rustcraft-linux
           - os: windows-latest
-            target-name: leafish.exe
-            release-name: leafish.exe
+            target-name: rustcraft.exe
+            release-name: rustcraft.exe
           - os: macos-11
-            target-name: bundle/osx/Leafish.app.zip
-            release-name: Leafish.app
+            target-name: bundle/osx/RustCraft.app.zip
+            release-name: RustCraft.app
 
     steps:
       - uses: actions/checkout@v3
@@ -73,11 +73,11 @@ jobs:
       - name: "[MacOS ONLY] Package binary"
         if: ${{ matrix.os == 'macos-11' }}
         run: |
-          chmod a+x target/release/leafish
+          chmod a+x target/release/rustcraft
           cargo install cargo-bundle || echo "cargo-bundle already installed"
           cargo bundle --release
           cd target/release/bundle/osx
-          zip -r Leafish.app.zip Leafish.app
+          zip -r RustCraft.app.zip RustCraft.app
 
       - name: Upload binary
         uses: actions/upload-artifact@v3

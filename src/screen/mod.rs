@@ -19,12 +19,15 @@ pub use self::login::*;
 
 pub mod confirm_box;
 pub mod connecting;
+pub mod direct_connect;
 pub mod edit_server;
 
 pub mod background;
 pub mod chat;
 pub mod edit_account;
 pub mod launcher;
+pub mod main_menu;
+pub use self::main_menu::*;
 pub mod respawn;
 pub mod settings_menu;
 
@@ -326,9 +329,12 @@ impl ScreenSystem {
                     .lock()
                     .on_active(self, renderer.clone(), ui_container);
             }
-            if current.last_width != renderer.screen_data.read().safe_width as i32
-                || current.last_height != renderer.screen_data.read().safe_height as i32
-            {
+            let scale = window.scale_factor();
+            let logical_width =
+                (renderer.screen_data.read().safe_width as f64 / scale).round() as i32;
+            let logical_height =
+                (renderer.screen_data.read().safe_height as f64 / scale).round() as i32;
+            if current.last_width != logical_width || current.last_height != logical_height {
                 if current.last_width != -1 && current.last_height != -1 {
                     for screen in tmp.iter_mut().enumerate() {
                         if screen.1.screen.lock().is_tick_always() || screen.0 == len - 1 {
@@ -337,13 +343,13 @@ impl ScreenSystem {
                                 renderer.clone(),
                                 ui_container,
                             );
-                            screen.1.last_width = renderer.screen_data.read().safe_width as i32;
-                            screen.1.last_height = renderer.screen_data.read().safe_height as i32;
+                            screen.1.last_width = logical_width;
+                            screen.1.last_height = logical_height;
                         }
                     }
                 } else {
-                    current.last_width = renderer.screen_data.read().safe_width as i32;
-                    current.last_height = renderer.screen_data.read().safe_height as i32;
+                    current.last_width = logical_width;
+                    current.last_height = logical_height;
                 }
             }
             for screen in tmp.iter_mut().enumerate() {

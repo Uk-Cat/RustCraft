@@ -13177,7 +13177,7 @@ impl Block {
             Block::PearlescentFroglight { axis } => ("minecraft", "pearlescent_froglight"),
             Block::Frogspawn { } => ("minecraft", "frogspawn"),
             Block::ReinforcedDeepslate { } => ("minecraft", "reinforced_deepslate"),
-            Block::Missing { } => ("leafish", "missing_block"),
+            Block::Missing { } => ("rustcraft", "missing_block"),
         }
     }
 

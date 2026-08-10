@@ -19,7 +19,7 @@ fn get_dir(dirtype: Option<PathBuf>) -> PathBuf {
     match dirtype {
         Some(path) => {
             let mut path = path;
-            path.push("leafish");
+            path.push("rustcraft");
             if !path.exists() {
                 fs::create_dir_all(path.clone()).unwrap();
             }

@@ -866,7 +866,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
-name = "leafish_protocol"
+name = "rustcraft_protocol"
 version = "0.0.1"
 dependencies = [
  "aes",
@@ -879,7 +879,7 @@ dependencies = [
  "hex",
  "instant",
  "lazy_static",
- "leafish_shared",
+ "rustcraft_shared",
  "log",
  "num-traits",
  "reqwest",
@@ -890,7 +890,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "leafish_shared"
+name = "rustcraft_shared"
 version = "0.0.1"
 dependencies = [
  "bevy_ecs",

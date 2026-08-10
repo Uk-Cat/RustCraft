@@ -36,8 +36,8 @@ use glutin::surface::SwapInterval;
 use glutin_winit::DisplayBuilder;
 use glutin_winit::GlWindow;
 use instant::Duration;
-use leafish_protocol::protocol::login::AccountType;
-use log::{debug, error, info, warn};
+use rustcraft_protocol::protocol::login::AccountType;
+use log::{debug, info, warn};
 use raw_window_handle::HasRawWindowHandle;
 use shared::Version;
 use std::fs;
@@ -54,18 +54,18 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::raw_window_handle::RawDisplayHandle;
 use winit::window::CursorGrabMode;
 use winit::window::Icon;
-extern crate leafish_shared as shared;
+extern crate rustcraft_shared as shared;
 
 use structopt::StructOpt;
 
-extern crate leafish_protocol;
+extern crate rustcraft_protocol;
 
 pub mod ecs;
-use leafish_protocol::format;
-use leafish_protocol::nbt;
-use leafish_protocol::protocol;
+use rustcraft_protocol::format;
+use rustcraft_protocol::nbt;
+use rustcraft_protocol::protocol;
 pub mod gl;
-use leafish_protocol::types;
+use rustcraft_protocol::types;
 pub mod chunk_builder;
 pub mod entity;
 mod inventory;
@@ -77,14 +77,15 @@ pub mod resources;
 pub mod screen;
 pub mod server;
 pub mod settings;
+pub mod sysinfo;
 pub mod ui;
 pub mod world;
 
 use crate::entity::Rotation;
 use crate::render::hud::HudContext;
 use crate::settings::*;
-use leafish_protocol::protocol::login::Account;
-use leafish_protocol::protocol::Error;
+use rustcraft_protocol::protocol::login::Account;
+use rustcraft_protocol::protocol::Error;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::cell::RefCell;
@@ -119,6 +120,7 @@ pub struct Game {
     ctrl_pressed: AtomicBool,
     logo_pressed: AtomicBool,
     fullscreen: AtomicBool,
+    mouse_down: AtomicBool,
     current_account: Arc<Mutex<Option<Account>>>,
 }
 
@@ -203,6 +205,14 @@ impl Game {
         self.ctrl_pressed.store(pressed, Ordering::Release);
     }
 
+    pub fn is_mouse_down(&self) -> bool {
+        self.mouse_down.load(Ordering::Acquire)
+    }
+
+    pub fn set_mouse_down(&self, down: bool) {
+        self.mouse_down.store(down, Ordering::Release);
+    }
+
     pub fn connect_to(
         &self,
         address: &str,
@@ -278,7 +288,7 @@ impl Game {
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "leafish")]
+#[structopt(name = "rustcraft")]
 struct Opt {
     /// Log decoded packets received from network
     #[structopt(short = "n", long = "network-debug")]
@@ -319,7 +329,7 @@ fn main() {
     log::set_boxed_logger(Box::new(proxy)).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
 
-    info!("Starting Leafish...");
+    info!("Starting RustCraft...");
 
     let settings = Arc::new(SettingStore::new());
     let keybinds = Arc::new(KeybindStore::new());
@@ -340,7 +350,7 @@ fn main() {
     let events_loop = winit::event_loop::EventLoop::new().unwrap();
 
     let window_builder = winit::window::WindowBuilder::new()
-        .with_title("Leafish")
+        .with_title("RustCraft")
         .with_window_icon(Some(
             Icon::from_rgba(
                 image::load_from_memory(include_bytes!("../resources/icon32x32.png"))
@@ -458,6 +468,13 @@ fn main() {
 
     let textures = renderer.get_textures();
 
+    // Register the RustCraft title logo so it can be used by the UI.
+    {
+        let mut textures = textures.write();
+        let img = image::load_from_memory(include_bytes!("../resources/assets/rustcraft/textures/gui/title.png")).unwrap();
+        textures.put_dynamic("gui/title", img);
+    }
+
     #[cfg(target_os = "linux")]
     let clipboard: Box<dyn ClipboardProvider> = match events_loop.display_handle() {
         Ok(display) => {
@@ -501,6 +518,7 @@ fn main() {
         ctrl_pressed: AtomicBool::new(false),
         logo_pressed: AtomicBool::new(false),
         fullscreen: AtomicBool::new(false),
+        mouse_down: AtomicBool::new(false),
         clipboard_provider: Mutex::new(clipboard),
         current_account: active_account,
         settings,
@@ -585,7 +603,7 @@ fn tick_all(
     last_frame: &mut Instant,
     resui: &mut resources::ManagerUI,
     last_resource_version: &mut usize,
-    vsync: bool,
+    _vsync: bool,
 ) {
     let server = game.server.load();
     if let Some(server) = server.as_ref() {
@@ -632,17 +650,13 @@ fn tick_all(
     };
     *last_resource_version = version;
 
-    let vsync_changed = game.settings.get_bool(BoolSetting::Vsync);
-    if vsync != vsync_changed {
-        error!("Changing vsync currently requires restarting");
-        game.set_should_close();
-        // TODO: after changing to wgpu and the new renderer, allow changing vsync on a Window
-        // vsync = vsync_changed;
-    }
     let fps_cap = game.settings.get_int(IntSetting::MaxFps);
 
     if let Some(server) = game.server.load().as_ref() {
         server.tick(delta, game);
+        let mut hud = server.hud_context.write();
+        hud.push_frame_time(diff.as_secs_f64());
+        hud.show_fps = game.settings.get_bool(BoolSetting::ShowFps);
     }
 
     // Check if window is valid, it might be minimized
@@ -676,7 +690,7 @@ fn tick_all(
         }
     } else if !game.is_focused() {
         // see https://docs.rs/winit/latest/winit/window/enum.CursorGrabMode.html
-        // fix for https://github.com/Lea-fish/Leafish/issues/265
+        // fix for https://github.com/Lea-fish/RustCraft/issues/265
         // prefer Locked cursor mode, and fallback to Confined if that doesn't work
         if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
             window.set_cursor_grab(CursorGrabMode::Confined).unwrap();
@@ -684,6 +698,14 @@ fn tick_all(
         window.set_cursor_visible(false);
         game.set_focused(true);
     }
+    ui_container.mode = if game.screen_sys.is_any_ingame() {
+        match game.settings.get_int(IntSetting::GuiScale) {
+            0 => ui::Mode::Scaled,
+            scale => ui::Mode::Unscaled(scale as f64 / 4.0),
+        }
+    } else {
+        ui::Mode::Scaled
+    };
     game.console
         .lock()
         .tick(ui_container, game.renderer.clone(), delta, width as f64);
@@ -699,7 +721,7 @@ fn tick_all(
         server.render_list_computer.send(true).unwrap();
     }
 
-    if fps_cap > 0 && !vsync {
+    if fps_cap > 0 {
         let frame_time = now.elapsed();
         let sleep_interval = Duration::from_millis(1000 / fps_cap as u64);
         if frame_time < sleep_interval {
@@ -727,6 +749,9 @@ fn handle_window_event<T>(
             ..
         } => {
             let mouse_sens: f64 = game.settings.get_float(FloatSetting::MouseSense);
+            // Stored as a percentage (1% to 200%). 100% equals 2.5x the old
+            // default feel to be closer to Minecraft.
+            let sens_mult = (mouse_sens / 100.0) * 2.5;
             let (rx, ry) = if xrel > 1000.0 || yrel > 1000.0 {
                 // Heuristic for if we were passed an absolute value instead of relative
                 // Workaround https://github.com/tomaka/glutin/issues/1084 MouseMotion event returns absolute instead of relative values, when running Linux in a VM
@@ -734,12 +759,12 @@ fn handle_window_event<T>(
                 // sdl2::hint::set_with_priority("SDL_MOUSE_RELATIVE_MODE_WARP", "1", &sdl2::hint::Hint::Override);
                 let s = 8000.0 + 0.01;
                 (
-                    ((xrel - game.get_last_mouse_xrel()) / s) * mouse_sens,
-                    ((yrel - game.get_last_mouse_yrel()) / s) * mouse_sens,
+                    ((xrel - game.get_last_mouse_xrel()) / s) * sens_mult,
+                    ((yrel - game.get_last_mouse_yrel()) / s) * sens_mult,
                 )
             } else {
                 let s = 2000.0 + 0.01;
-                ((xrel / s) * mouse_sens, (yrel / s) * mouse_sens)
+                ((xrel / s) * sens_mult, (yrel / s) * sens_mult)
             };
 
             game.set_last_mouse_xrel(xrel);
@@ -785,6 +810,7 @@ fn handle_window_event<T>(
                 WindowEvent::CloseRequested => game.set_should_close(),
                 WindowEvent::MouseInput { state, button, .. } => match (state, button) {
                     (ElementState::Released, MouseButton::Left) => {
+                        game.set_mouse_down(false);
                         let physical_size = window.inner_size();
                         let (width, height) = physical_size.to_logical::<f64>(dpi_factor).into();
                         if !game.screen_sys.is_current_ingame() && !game.is_focused() {
@@ -802,6 +828,7 @@ fn handle_window_event<T>(
                         }
                     }
                     (ElementState::Pressed, MouseButton::Left) => {
+                        game.set_mouse_down(true);
                         if let Some(server) = game.server.load().as_ref() {
                             server.on_left_click(game.is_focused(), game.is_shift_pressed());
                         }
@@ -816,6 +843,11 @@ fn handle_window_event<T>(
                             server.on_right_click(game.is_focused(), game.is_shift_pressed());
                         }
                     }
+                    (ElementState::Pressed, MouseButton::Middle) => {
+                        if let Some(server) = game.server.load().as_ref() {
+                            server.on_middle_click(game.is_focused());
+                        }
+                    }
                     (_, _) => (),
                 },
                 WindowEvent::CursorMoved { position, .. } => {
@@ -827,6 +859,9 @@ fn handle_window_event<T>(
                         let physical_size = window.inner_size();
                         let (width, height) = physical_size.to_logical::<f64>(dpi_factor).into();
                         ui_container.hover_at(game, x, y, width, height);
+                        if game.is_mouse_down() {
+                            ui_container.drag_at(game, x, y, width, height);
+                        }
                         if let Some(server) = game.server.load().as_ref() {
                             server.on_cursor_moved(x, y);
                         }

@@ -1,4 +1,4 @@
-use leafish_protocol::format::Component;
+use rustcraft_protocol::format::Component;
 
 use crate::entity::resolve_textures;
 use crate::render::model::{self, FormatState, Vertex};

@@ -3476,6 +3476,43 @@ pub fn send_arm_swing(conn: &mut Conn, hand: Hand) -> Result<(), Error> {
     }
 }
 
+pub fn send_use_entity(conn: &mut Conn, target_id: i32, ty: i32, hand: Option<Hand>, sneaking: bool) -> Result<(), Error> {
+    let version = conn.get_version();
+    if version < Version::V1_8 {
+        conn.write_packet(packet::play::serverbound::UseEntity_Handsfree_i32 {
+            target_id,
+            ty: ty as u8,
+        })
+    } else if version < Version::V1_9 {
+        conn.write_packet(packet::play::serverbound::UseEntity_Handsfree {
+            target_id: VarInt(target_id),
+            ty: VarInt(ty),
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+        })
+    } else if version < Version::V1_14 {
+        conn.write_packet(packet::play::serverbound::UseEntity_Hand {
+            target_id: VarInt(target_id),
+            ty: VarInt(ty),
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+            hand: VarInt(hand.unwrap_or(Hand::MainHand).ordinal()),
+        })
+    } else {
+        conn.write_packet(packet::play::serverbound::UseEntity_Sneakflag {
+            target_id: VarInt(target_id),
+            ty: VarInt(ty),
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+            hand: VarInt(hand.unwrap_or(Hand::MainHand).ordinal()),
+            sneaking,
+        })
+    }
+}
+
 pub fn send_digging(
     conn: &mut Conn,
     status: DigType,

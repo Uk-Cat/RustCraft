@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 
-use leafish_protocol::types::hash::FNVHash;
-use leafish_shared::position::Position;
+use rustcraft_protocol::types::hash::FNVHash;
+use rustcraft_shared::position::Position;
 
 use crate::world::biome;
 
@@ -175,7 +175,7 @@ impl Chunk {
 
     // TODO: make use of "get_biome"
     #[allow(dead_code)]
-    fn get_biome(&self, x: i32, z: i32) -> biome::Biome {
+    pub fn get_biome(&self, x: i32, z: i32) -> biome::Biome {
         biome::Biome::by_id(self.biomes[((z << 4) | x) as usize] as usize)
     }
 

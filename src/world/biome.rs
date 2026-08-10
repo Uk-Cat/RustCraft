@@ -39,6 +39,29 @@ impl Biome {
             col
         }
     }
+
+    /// Human readable name of the biome (e.g. "Extreme Hills").
+    pub fn name(self) -> String {
+        let raw = BY_ID_NAME[self.id.min(255)];
+        if raw.is_empty() {
+            return "Unknown".to_string();
+        }
+        let lower = raw.to_lowercase();
+        let mut out = String::with_capacity(lower.len());
+        let mut new_word = true;
+        for ch in lower.chars() {
+            if ch == '_' {
+                out.push(' ');
+                new_word = true;
+            } else if new_word {
+                out.extend(ch.to_uppercase());
+                new_word = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
 }
 
 macro_rules! define_biomes {
@@ -56,6 +79,13 @@ macro_rules! define_biomes {
                     by_id[$name.id] = $name;
                 )*
                 by_id
+            };
+            static ref BY_ID_NAME: [&'static str; 256] = {
+                let mut by_name = [""; 256];
+                $(
+                    by_name[$name.id] = stringify!($name);
+                )*
+                by_name
             };
         }
     )

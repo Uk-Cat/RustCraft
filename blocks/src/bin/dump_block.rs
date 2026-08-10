@@ -1,4 +1,4 @@
-use leafish_blocks::VanillaIDMap;
+use rustcraft_blocks::VanillaIDMap;
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;

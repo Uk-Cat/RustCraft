@@ -18,10 +18,10 @@ use crate::types::GameMode;
 use crate::world;
 use arc_swap::ArcSwapOption;
 use bevy_ecs::prelude::*;
-use cgmath::{Decomposed, Matrix4, Point3, Quaternion, Rad, Rotation3, Vector3};
+use cgmath::{Decomposed, Matrix4, Point3, Quaternion, Rad, Rotation3, SquareMatrix, Vector3};
 use collision::{Aabb, Aabb3};
 use instant::Instant;
-use leafish_protocol::format::Component;
+use rustcraft_protocol::format::Component;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,7 +72,7 @@ pub fn add_systems(sched: &mut Schedule, render_sched: &mut Schedule) {
 pub fn create_local(m: &mut Manager) -> Entity {
     let mut entity = m.world.spawn_empty();
     let mut tpos = TargetPosition::new(0.0, 0.0, 0.0);
-    tpos.lerp_amount = 1.0 / 3.0;
+    tpos.lerp_amount = 0.9;
     entity
         .insert(Position::new(0.0, 0.0, 0.0))
         .insert(tpos)
@@ -166,11 +166,11 @@ impl PlayerModel {
 fn update_render_players(
     renderer: Res<RendererResource>,
     game_info: Res<GameInfo>,
-    mut query: Query<(&mut PlayerModel, &Position, &Rotation, &Light)>,
+    mut query: Query<(&mut PlayerModel, &Position, &Rotation, &Light, Option<&MouseButtons>)>,
 ) {
     let renderer = &renderer.0;
     let delta = game_info.delta;
-    for (mut player_model, position, rotation, light) in query.iter_mut() {
+    for (mut player_model, position, rotation, light, mouse_buttons) in query.iter_mut() {
         use std::f32::consts::PI;
         use std::f64::consts::PI as PI64;
 
@@ -187,6 +187,7 @@ fn update_render_players(
 
             mdl.block_light = light.block_light;
             mdl.sky_light = light.sky_light;
+            mdl.no_cull = player_model.first_person;
 
             let offset = if player_model.first_person {
                 let ox = (rotation.yaw - PI64 / 2.0).cos() * 0.25;
@@ -208,6 +209,23 @@ fn update_render_players(
                 rot: Quaternion::from_angle_y(Rad(PI + rotation.yaw as f32)),
                 disp: offset,
             });
+
+            let first_person_offset = if player_model.first_person {
+                let cam = renderer.camera.lock();
+                let cam_pos = Vector3::new(cam.pos.x as f32, -(cam.pos.y as f32), cam.pos.z as f32);
+                let forward = Vector3::new(
+                    (rotation.yaw as f32 - PI / 2.0).cos() * 0.5,
+                    0.0,
+                    -(rotation.yaw as f32 - PI / 2.0).sin() * 0.5,
+                );
+                Some(Matrix4::from(Decomposed {
+                    scale: 1.0,
+                    rot: Quaternion::from_angle_y(Rad(PI + rotation.yaw as f32)),
+                    disp: cam_pos + forward,
+                }))
+            } else {
+                None
+            };
 
             // TODO This sucks
             if player_model.has_name_tag {
@@ -260,37 +278,68 @@ fn update_render_players(
             }
             player_model.idle_time = i_time;
 
+            if let Some(mouse_buttons) = mouse_buttons {
+                if mouse_buttons.left {
+                    if player_model.arm_time <= 0.0 {
+                        player_model.arm_time = 15.0;
+                    }
+                }
+            }
+
             if player_model.arm_time <= 0.0 {
                 player_model.arm_time = 0.0;
             } else {
                 player_model.arm_time -= delta;
             }
 
-            mdl.matrix[PlayerModelPart::ArmRight as usize] = offset_matrix
-                * Matrix4::from_translation(Vector3::new(
-                    6.0 / 16.0,
-                    -12.0 / 16.0 - 12.0 / 16.0,
-                    0.0,
-                ))
-                * Matrix4::from(Quaternion::from_angle_x(Rad(-(ang * 0.75) as f32)))
-                * Matrix4::from(Quaternion::from_angle_z(Rad(
-                    (i_time.cos() * 0.06 - 0.06) as f32
-                )))
-                * Matrix4::from(Quaternion::from_angle_x(Rad((i_time.sin() * 0.06
-                    - ((7.5 - (player_model.arm_time - 7.5).abs()) / 7.5))
-                    as f32)));
+            let arm_base = first_person_offset.as_ref().unwrap_or(&offset_matrix);
 
-            mdl.matrix[PlayerModelPart::ArmLeft as usize] = offset_matrix
-                * Matrix4::from_translation(Vector3::new(
-                    -6.0 / 16.0,
-                    -12.0 / 16.0 - 12.0 / 16.0,
-                    0.0,
-                ))
-                * Matrix4::from(Quaternion::from_angle_x(Rad((ang * 0.75) as f32)))
-                * Matrix4::from(Quaternion::from_angle_z(Rad(
-                    -(i_time.cos() * 0.06 - 0.06) as f32
-                )))
-                * Matrix4::from(Quaternion::from_angle_x(Rad(-(i_time.sin() * 0.06) as f32)));
+            if player_model.first_person {
+                let v_inv = renderer.camera_matrix.lock().invert().unwrap_or(Matrix4::identity());
+                let punch_forward = ((7.5 - (player_model.arm_time - 7.5).abs()) / 7.5) as f32;
+                let hook_sweep = punch_forward;
+                let hand_pos = Vector3::new(0.15 - hook_sweep * 0.075, -0.25 - punch_forward * 0.05, -0.01 - punch_forward * 0.15);
+
+                mdl.matrix[PlayerModelPart::ArmRight as usize] = v_inv
+                    * Matrix4::from_translation(hand_pos)
+                    * Matrix4::from_scale(0.30)
+                    * Matrix4::from(Quaternion::from_angle_y(Rad(-0.25)))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad(-1.05)))
+                    * Matrix4::from(Quaternion::from_angle_z(Rad(
+                        (i_time.cos() * 0.06 - 0.06 + 0.2 + hook_sweep as f64 * 0.5236) as f32
+                    )))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad(
+                        (i_time.sin() * 0.06) as f32
+                    )));
+
+                mdl.matrix[PlayerModelPart::ArmLeft as usize] = Matrix4::identity();
+            } else {
+                mdl.matrix[PlayerModelPart::ArmRight as usize] = arm_base
+                    * Matrix4::from_translation(Vector3::new(
+                        6.0 / 16.0,
+                        -12.0 / 16.0 - 12.0 / 16.0,
+                        0.0,
+                    ))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad(-(ang * 0.75) as f32)))
+                    * Matrix4::from(Quaternion::from_angle_z(Rad(
+                        (i_time.cos() * 0.06 - 0.06) as f32
+                    )))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad((i_time.sin() * 0.06
+                        - ((7.5 - (player_model.arm_time - 7.5).abs()) / 7.5))
+                        as f32)));
+
+                mdl.matrix[PlayerModelPart::ArmLeft as usize] = arm_base
+                    * Matrix4::from_translation(Vector3::new(
+                        -6.0 / 16.0,
+                        -12.0 / 16.0 - 12.0 / 16.0,
+                        0.0,
+                    ))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad((ang * 0.75) as f32)))
+                    * Matrix4::from(Quaternion::from_angle_z(Rad(
+                        -(i_time.cos() * 0.06 - 0.06) as f32
+                    )))
+                    * Matrix4::from(Quaternion::from_angle_x(Rad(-(i_time.sin() * 0.06) as f32)));
+            }
 
             let mut update = true;
             if position.moved {
@@ -374,26 +423,28 @@ fn add_player(renderer: Arc<Renderer>, player_model: &mut PlayerModel) {
 
     // TODO: Cape
     let mut body_verts = vec![];
-    model::append_box(
-        &mut body_verts,
-        -4.0 / 16.0,
-        -6.0 / 16.0,
-        -2.0 / 16.0,
-        8.0 / 16.0,
-        12.0 / 16.0,
-        4.0 / 16.0,
-        resolve_textures(&skin, 8.0, 12.0, 4.0, 16.0, 16.0),
-    );
-    model::append_box(
-        &mut body_verts,
-        -4.2 / 16.0,
-        -6.2 / 16.0,
-        -2.2 / 16.0,
-        8.4 / 16.0,
-        12.4 / 16.0,
-        4.4 / 16.0,
-        resolve_textures(&skin, 8.0, 12.0, 4.0, 16.0, 16.0),
-    );
+    if !player_model.first_person {
+        model::append_box(
+            &mut body_verts,
+            -4.0 / 16.0,
+            -6.0 / 16.0,
+            -2.0 / 16.0,
+            8.0 / 16.0,
+            12.0 / 16.0,
+            4.0 / 16.0,
+            resolve_textures(&skin, 8.0, 12.0, 4.0, 16.0, 16.0),
+        );
+        model::append_box(
+            &mut body_verts,
+            -4.2 / 16.0,
+            -6.2 / 16.0,
+            -2.2 / 16.0,
+            8.4 / 16.0,
+            12.4 / 16.0,
+            4.4 / 16.0,
+            resolve_textures(&skin, 8.0, 12.0, 4.0, 16.0, 16.0),
+        );
+    }
 
     let mut part_verts = vec![vec![]; 4];
 
@@ -406,8 +457,11 @@ fn add_player(renderer: Arc<Renderer>, player_model: &mut PlayerModel) {
     .iter()
     .enumerate()
     {
+        if player_model.first_person && i < 2 {
+            continue;
+        }
         // TODO: Fix alex (slim) skins
-        let alex = i > 1;
+        let alex = false;
         let width = if alex {
             // arms of alex (slim) skins have 3/4 of the width of normal skins!
             3.0
@@ -484,7 +538,7 @@ fn add_player(renderer: Arc<Renderer>, player_model: &mut PlayerModel) {
         name_verts.extend_from_slice(&state.text);
     }
     let mut model = renderer.clone().models.lock().create_model(
-        model::DEFAULT,
+        model::FIRST_PERSON,
         vec![
             head_verts,
             body_verts,
@@ -536,38 +590,26 @@ impl PlayerMovement {
         Default::default()
     }
 
-    fn calculate_movement(&self, player_yaw: f64) -> (f64, f64, bool) {
-        use std::f64::consts::PI;
-        let mut forward = 0.0f64;
-        let mut yaw = player_yaw - (PI / 2.0);
-        if self.is_key_pressed(Actionkey::Forward) || self.is_key_pressed(Actionkey::Backward) {
-            // TODO: Make walking backwards slower!
-            forward = 1.0;
-            if self.is_key_pressed(Actionkey::Backward) {
-                yaw += PI;
-            }
-        }
-        let change = if self.is_key_pressed(Actionkey::Left) {
-            (PI / 2.0) / (forward.abs() + 1.0)
-        } else if self.is_key_pressed(Actionkey::Right) {
-            -(PI / 2.0) / (forward.abs() + 1.0)
-        } else {
-            0.0
-        };
-        if self.is_key_pressed(Actionkey::Left) || self.is_key_pressed(Actionkey::Right) {
-            forward = 1.0;
+    fn movement_input(&self) -> (f64, f64) {
+        let mut forward = 0.0;
+        let mut strafe = 0.0;
+        if self.is_key_pressed(Actionkey::Forward) {
+            forward += 1.0;
         }
         if self.is_key_pressed(Actionkey::Backward) {
-            yaw -= change;
-        } else {
-            yaw += change;
+            forward -= 1.0;
         }
-
-        (
-            forward,
-            yaw,
-            self.is_key_pressed(Actionkey::Forward) && !self.is_key_pressed(Actionkey::Backward),
-        )
+        if self.is_key_pressed(Actionkey::Left) {
+            strafe += 1.0;
+        }
+        if self.is_key_pressed(Actionkey::Right) {
+            strafe -= 1.0;
+        }
+        if self.is_key_pressed(Actionkey::Sneak) {
+            strafe *= 0.3;
+            forward *= 0.3;
+        }
+        (strafe, forward)
     }
 
     fn is_key_pressed(&self, key: Actionkey) -> bool {
@@ -634,11 +676,11 @@ pub fn handle_movement(
                     let dt = movement.when_last_jump_pressed.unwrap()
                         - movement.when_last_jump_released.unwrap();
                     if dt.as_secs() == 0 && dt.subsec_millis() <= crate::settings::DOUBLE_JUMP_MS {
-                        movement.want_to_fly = !movement.want_to_fly;
                         //info!("double jump! dt={:?} toggle want_to_fly = {}", dt, movement.want_to_fly);
 
                         if gamemode.can_fly() && !gamemode.always_fly() {
-                            movement.flying = movement.want_to_fly;
+                            movement.flying = !movement.flying;
+                            movement.want_to_fly = movement.flying;
                         }
                     }
                 }
@@ -656,53 +698,53 @@ pub fn handle_movement(
             (position.position.x as i32) >> 4,
             (position.position.z as i32) >> 4,
         ) {
-            let (forward, yaw, is_forward) = movement.calculate_movement(rotation.yaw);
-            let mut speed = 0.21585;
-            let mut additional_speed = if movement.is_key_pressed(Actionkey::Sprint) && is_forward {
-                0.2806 - 0.21585
-            } else {
-                0.0
-            };
-            let looking_vec = calculate_looking_vector(rotation.yaw, rotation.pitch);
+            let (strafe, forward) = movement.movement_input();
+            let yaw = rotation.yaw - std::f64::consts::PI / 2.0;
+            let on_ground = gravity.as_ref().is_some_and(|v| v.on_ground);
+            let is_sprinting = movement.is_key_pressed(Actionkey::Sprint)
+                && movement.is_key_pressed(Actionkey::Forward)
+                && !movement.is_key_pressed(Actionkey::Backward)
+                && !movement.is_key_pressed(Actionkey::Sneak);
+
             if movement.flying {
-                speed *= 2.5;
-                additional_speed *= 2.5;
-
-                if movement.is_key_pressed(Actionkey::Jump) {
-                    position.position.y += speed + additional_speed;
-                }
-                if movement.is_key_pressed(Actionkey::Sneak) {
-                    position.position.y -= speed + additional_speed;
-                }
-            } else if gravity.as_ref().map_or(false, |v| v.on_ground) {
-                if movement.is_key_pressed(Actionkey::Jump) && velocity.velocity.y.abs() < 0.001 {
-                    velocity.velocity.y = 0.42;
-                }
+                let fly_speed = 0.21585 * 2.5 * if is_sprinting { 0.2806 / 0.21585 } else { 1.0 };
+                let mut direction = Vector3::new(0.0, 0.0, 0.0);
+                move_relative(&mut direction, strafe, forward, 1.0, yaw);
+                velocity.velocity.x = direction.x * fly_speed;
+                velocity.velocity.z = direction.z * fly_speed;
+                velocity.velocity.y = if movement.is_key_pressed(Actionkey::Jump) {
+                    fly_speed
+                } else if movement.is_key_pressed(Actionkey::Sneak) {
+                    -fly_speed
+                } else {
+                    0.0
+                };
             } else {
-                velocity.velocity.y -= 0.08;
-                if velocity.velocity.y < -3.92 {
-                    velocity.velocity.y = -3.92;
+                if on_ground && movement.is_key_pressed(Actionkey::Jump) {
+                    velocity.velocity.y = 0.42;
+                    if is_sprinting {
+                        let (bx, bz) = sprint_jump_boost(rotation.yaw);
+                        velocity.velocity.x += bx;
+                        velocity.velocity.z += bz;
+                    }
                 }
-            }
-            velocity.velocity.y *= 0.98;
-            velocity.velocity.x *= 0.98;
-            velocity.velocity.z *= 0.98;
-            // position.position.x += look_vec.0 * speed;
-            // position.position.z -= look_vec.1 * speed;
-            position.position.x += forward * yaw.cos() * (speed + looking_vec.0 * additional_speed); // TODO: Multiply with speed only for walking forwards
-            position.position.z -= forward * yaw.sin() * (speed + looking_vec.1 * additional_speed);
-            position.position.y += velocity.velocity.y;
-            if (velocity.velocity.x.abs() * 0.2) < 0.005 {
-                velocity.velocity.x = 0.0;
+
+                let movement_factor = if on_ground {
+                    let base_speed = if is_sprinting { 0.13 } else { 0.1 };
+                    base_speed * (0.16277136 / (0.546 * 0.546 * 0.546))
+                } else {
+                    0.02
+                };
+                move_relative(
+                    &mut velocity.velocity,
+                    strafe,
+                    forward,
+                    movement_factor,
+                    yaw,
+                );
             }
 
-            if (velocity.velocity.y.abs() * 0.2) < 0.005 {
-                velocity.velocity.y = 0.0;
-            }
-
-            if (velocity.velocity.z.abs() * 0.2) < 0.005 {
-                velocity.velocity.z = 0.0;
-            }
+            position.position += velocity.velocity;
 
             if !gamemode.noclip() {
                 let mut target = position.position;
@@ -716,12 +758,18 @@ pub fn handle_movement(
                     check_collisions(world, &mut position, &last_position, player_bounds);
                 position.position.x = bounds.min.x + 0.3;
                 last_position.x = position.position.x;
+                if xhit {
+                    velocity.velocity.x = 0.0;
+                }
 
                 position.position.z = target.z;
                 let (bounds, zhit) =
                     check_collisions(world, &mut position, &last_position, player_bounds);
                 position.position.z = bounds.min.z + 0.3;
                 last_position.z = position.position.z;
+                if zhit {
+                    velocity.velocity.z = 0.0;
+                }
 
                 // Half block jumps
                 // Minecraft lets you 'jump' up 0.5 blocks
@@ -772,15 +820,55 @@ pub fn handle_movement(
                     }
                 }
             }
+
+            if !movement.flying {
+                velocity.velocity.y -= 0.08;
+                if velocity.velocity.y < -3.92 {
+                    velocity.velocity.y = -3.92;
+                }
+                velocity.velocity.y *= 0.98;
+                let drag = if on_ground { 0.546 } else { 0.91 };
+                velocity.velocity.x *= drag;
+                velocity.velocity.z *= drag;
+            }
+
+            if velocity.velocity.x.abs() < 0.003 {
+                velocity.velocity.x = 0.0;
+            }
+            if velocity.velocity.y.abs() < 0.003 {
+                velocity.velocity.y = 0.0;
+            }
+            if velocity.velocity.z.abs() < 0.003 {
+                velocity.velocity.z = 0.0;
+            }
         }
     }
 }
 
-fn calculate_looking_vector(yaw: f64, pitch: f64) -> (f64, f64) {
-    let xz = pitch.to_radians().cos();
-    let x = -xz * yaw.to_radians().sin();
-    let z = xz * yaw.to_radians().cos();
-    (x, z)
+fn move_relative(
+    velocity: &mut Vector3<f64>,
+    strafe: f64,
+    forward: f64,
+    movement_factor: f64,
+    yaw: f64,
+) {
+    let mut distance = strafe * strafe + forward * forward;
+    if distance >= 1.0e-4 {
+        distance = distance.sqrt();
+        if distance < 1.0 {
+            distance = 1.0;
+        }
+        let scale = movement_factor / distance;
+        let strafe = strafe * scale;
+        let forward = forward * scale;
+        velocity.x += forward * yaw.cos() - strafe * yaw.sin();
+        velocity.z += -forward * yaw.sin() - strafe * yaw.cos();
+    }
+}
+
+// The horizontal burst of speed applied on a sprint-jump.
+fn sprint_jump_boost(yaw: f64) -> (f64, f64) {
+    (yaw.sin() * 0.2, yaw.cos() * 0.2)
 }
 
 fn check_collisions(
@@ -889,5 +977,101 @@ impl Default for MovementDelta {
                 pitch: f64::MAX,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{InnerSpace, Vector3};
+    use std::f64::consts::PI;
+
+    fn facing_forward() -> f64 {
+        -PI / 2.0
+    }
+
+    fn assert_close(a: f64, b: f64) {
+        assert!((a - b).abs() < 1e-6, "expected {a} to be close to {b}");
+    }
+
+    #[test]
+    fn forward_moves_in_facing_direction() {
+        let mut v = Vector3::new(0.0, 0.0, 0.0);
+        move_relative(&mut v, 0.0, 1.0, 0.1, facing_forward());
+        assert_close(v.x, 0.0);
+        assert_close(v.z, 0.1);
+    }
+
+    #[test]
+    fn strafe_moves_perpendicular_to_facing() {
+        let mut v = Vector3::new(0.0, 0.0, 0.0);
+        move_relative(&mut v, 1.0, 0.0, 0.1, facing_forward());
+        assert_close(v.x, 0.1);
+        assert_close(v.z, 0.0);
+    }
+
+    #[test]
+    fn diagonal_is_normalized_to_full_speed() {
+        let mut v = Vector3::new(0.0, 0.0, 0.0);
+        move_relative(&mut v, 1.0, 1.0, 0.1, facing_forward());
+        let expected = 0.1 / 2.0f64.sqrt();
+        assert_close(v.x, expected);
+        assert_close(v.z, expected);
+        assert_close(v.magnitude(), 0.1);
+    }
+
+    #[test]
+    fn backward_moves_opposite_to_facing() {
+        let mut v = Vector3::new(0.0, 0.0, 0.0);
+        move_relative(&mut v, 0.0, -1.0, 0.1, facing_forward());
+        assert_close(v.x, 0.0);
+        assert_close(v.z, -0.1);
+    }
+
+    #[test]
+    fn no_input_does_not_move() {
+        let mut v = Vector3::new(0.0, 0.0, 0.0);
+        move_relative(&mut v, 0.0, 0.0, 0.1, facing_forward());
+        assert_close(v.x, 0.0);
+        assert_close(v.z, 0.0);
+    }
+
+    #[test]
+    fn sneak_scales_input_by_0_3() {
+        let mut movement = PlayerMovement::new();
+        movement.pressed_keys.insert(Actionkey::Forward, true);
+        movement.pressed_keys.insert(Actionkey::Left, true);
+        movement.pressed_keys.insert(Actionkey::Sneak, true);
+        let (strafe, forward) = movement.movement_input();
+        assert_close(strafe, 0.3);
+        assert_close(forward, 0.3);
+    }
+
+    #[test]
+    fn air_strafe_accelerates_slower_than_ground() {
+        let yaw = facing_forward();
+        let mut air = Vector3::new(0.0, 0.0, 0.0);
+        let mut ground = Vector3::new(0.0, 0.0, 0.0);
+        for _ in 0..5 {
+            move_relative(&mut air, 1.0, 0.0, 0.02, yaw);
+            air *= 0.91;
+            move_relative(&mut ground, 1.0, 0.0, 0.1, yaw);
+            ground *= 0.546;
+        }
+        assert!(ground.x > air.x * 1.4);
+        assert!(air.x < 0.1);
+        assert!(ground.x > 0.1);
+    }
+
+    #[test]
+    fn sprint_jump_boost_matches_forward_direction() {
+        // yaw = 0 faces +Z, so the boost must push along +Z
+        let (x, z) = sprint_jump_boost(0.0);
+        assert_close(x, 0.0);
+        assert_close(z, 0.2);
+        // yaw = PI/2 faces +X, so the boost must push along +X
+        let (x, z) = sprint_jump_boost(PI / 2.0);
+        assert_close(x, 0.2);
+        assert_close(z, 0.0);
     }
 }

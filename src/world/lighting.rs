@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use leafish_shared::position::Position;
+use rustcraft_shared::position::Position;
 
 use crate::world::World;
 

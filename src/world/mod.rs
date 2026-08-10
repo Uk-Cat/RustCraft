@@ -15,9 +15,9 @@
 use arc_swap::ArcSwap;
 use bevy_ecs::entity::Entity;
 use bevy_ecs::system::{Command, Commands};
-pub use leafish_blocks as block;
-use leafish_protocol::format::Component;
-use leafish_protocol::nbt::NamedTag;
+pub use rustcraft_blocks as block;
+use rustcraft_protocol::format::Component;
+use rustcraft_protocol::nbt::NamedTag;
 
 use crate::shared::Position;
 use crate::{chunk_builder, ecs, format, render};
@@ -30,9 +30,9 @@ use collision::Frustum;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use flate2::read::ZlibDecoder;
 use instant::Instant;
-use leafish_protocol::protocol;
-use leafish_protocol::types::nibble;
-use leafish_shared::direction::Direction;
+use rustcraft_protocol::protocol;
+use rustcraft_protocol::types::nibble;
+use rustcraft_shared::direction::Direction;
 use log::warn;
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -41,7 +41,7 @@ use std::sync::Arc;
 
 pub use self::{chunk::*, lighting::*};
 use crate::entity::block_entity::sign::SignInfo;
-use leafish_protocol::protocol::{Serializable, VarInt};
+use rustcraft_protocol::protocol::{Serializable, VarInt};
 use std::sync::atomic::Ordering;
 
 pub mod biome;
@@ -160,6 +160,21 @@ impl World {
                     }
                 }
             }
+        } else {
+            // Re-render the changed block and its neighbours. Only the section
+            // containing the block is marked dirty by set_block itself, but
+            // blocks in neighbouring sections face it (their faces are culled
+            // against it), so those sections must be rebuilt too. Without this,
+            // breaking a block at a section boundary leaves a hole in the
+            // adjacent block's face, and fluids stop rendering at boundaries.
+            for yy in -1..2 {
+                for zz in -1..2 {
+                    for xx in -1..2 {
+                        let bp = pos + (xx, yy, zz);
+                        self.set_dirty(bp.x >> 4, bp.y >> 4, bp.z >> 4);
+                    }
+                }
+            }
         }
     }
 
@@ -200,6 +215,14 @@ impl World {
         match self.chunks.read().get(&CPos(pos.x >> 4, pos.z >> 4)) {
             Some(chunk) => chunk.get_block(pos.x & 0xF, pos.y, pos.z & 0xF),
             None => block::Missing {},
+        }
+    }
+
+    /// Returns the biome at the given block position.
+    pub fn get_biome(&self, pos: Position) -> biome::Biome {
+        match self.chunks.read().get(&CPos(pos.x >> 4, pos.z >> 4)) {
+            Some(chunk) => chunk.get_biome(pos.x & 0xF, pos.z & 0xF),
+            None => biome::Biome::by_id(0),
         }
     }
 
@@ -593,6 +616,39 @@ impl World {
             })
             .collect()
     }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_render_list_filtered(
+        &self,
+        frustum: &Frustum<f32>,
+    ) -> Vec<((i32, i32, i32), Arc<RwLock<render::ChunkBuffer>>)> {
+        self.render_list
+            .clone()
+            .read()
+            .iter()
+            // .par_iter()
+            .filter(|v| {
+                let min = cgmath::Point3::new(
+                    v.0 as f32 * 16.0,
+                    -v.1 as f32 * 16.0,
+                    v.2 as f32 * 16.0,
+                );
+                let bounds =
+                    collision::Aabb3::new(min, min + cgmath::Vector3::new(16.0, -16.0, 16.0));
+                frustum.contains(&bounds) != collision::Relation::Out
+            })
+            .filter_map(|v| {
+                let chunks = self.chunks.read();
+                let chunk = chunks.get(&CPos(v.0, v.2));
+                if let Some(chunk) = chunk {
+                    if let Some(sec) = chunk.sections[v.1 as usize].as_ref() {
+                        return Some((*v, sec.render_buffer.clone()));
+                    }
+                }
+                None
+            })
+            .collect()
+    }
     /*
         thread 'main' panicked at 'called `Option::unwrap()` on a `None` value', src/world/mod.rs:414:62
     stack backtrace:
@@ -604,8 +660,8 @@ impl World {
                  at /rustc/53cb7b09b00cbea8754ffb78e7e3cb521cb8af4b/library/core/src/panicking.rs:50:5
        3: core::option::Option<T>::unwrap
                  at /home/threadexception/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:386:21
-       4: leafish::world::World::get_render_list::{{closure}}
-                 at /home/threadexception/IdeaProjects/Leafish/src/world/mod.rs:414:29
+       4: rustcraft::world::World::get_render_list::{{closure}}
+                 at /home/threadexception/IdeaProjects/RustCraft/src/world/mod.rs:414:29
        5: core::iter::adapters::map::map_fold::{{closure}}
                  at /home/threadexception/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/adapters/map.rs:82:28
        6: core::iter::traits::iterator::Iterator::fold
@@ -624,14 +680,14 @@ impl World {
                  at /home/threadexception/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:2404:9
       13: core::iter::traits::iterator::Iterator::collect
                  at /home/threadexception/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:1788:9
-      14: leafish::world::World::get_render_list
-                 at /home/threadexception/IdeaProjects/Leafish/src/world/mod.rs:411:9
-      15: leafish::chunk_builder::ChunkBuilder::tick
-                 at /home/threadexception/IdeaProjects/Leafish/src/chunk_builder.rs:97:30
-      16: leafish::tick_all
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:507:5
-      17: leafish::main::{{closure}}
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:423:9
+      14: rustcraft::world::World::get_render_list
+                 at /home/threadexception/IdeaProjects/RustCraft/src/world/mod.rs:411:9
+      15: rustcraft::chunk_builder::ChunkBuilder::tick
+                 at /home/threadexception/IdeaProjects/RustCraft/src/chunk_builder.rs:97:30
+      16: rustcraft::tick_all
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:507:5
+      17: rustcraft::main::{{closure}}
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:423:9
       18: winit::platform_impl::platform::sticky_exit_callback
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/platform_impl/linux/mod.rs:746:5
       19: winit::platform_impl::platform::wayland::event_loop::EventLoop<T>::run_return
@@ -642,8 +698,8 @@ impl World {
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/platform_impl/linux/mod.rs:662:56
       22: winit::event_loop::EventLoop<T>::run
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/event_loop.rs:154:9
-      23: leafish::main
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:403:5
+      23: rustcraft::main
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:403:5
       24: core::ops::function::FnOnce::call_once
                  at /home/threadexception/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:227:5
     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
@@ -662,8 +718,8 @@ impl World {
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/core/src/panicking.rs:50:5
        3: core::option::Option<T>::unwrap
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/core/src/option.rs:388:21
-       4: leafish::world::World::get_render_list::{{closure}}
-                 at /home/threadexception/IdeaProjects/Leafish/src/world/mod.rs:590:29
+       4: rustcraft::world::World::get_render_list::{{closure}}
+                 at /home/threadexception/IdeaProjects/RustCraft/src/world/mod.rs:590:29
        5: core::iter::adapters::map::map_fold::{{closure}}
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/core/src/iter/adapters/map.rs:82:28
        6: core::iter::traits::iterator::Iterator::fold
@@ -682,14 +738,14 @@ impl World {
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/alloc/src/vec/mod.rs:2449:9
       13: core::iter::traits::iterator::Iterator::collect
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/core/src/iter/traits/iterator.rs:1748:9
-      14: leafish::world::World::get_render_list
-                 at /home/threadexception/IdeaProjects/Leafish/src/world/mod.rs:584:9
-      15: leafish::chunk_builder::ChunkBuilder::tick
-                 at /home/threadexception/IdeaProjects/Leafish/src/chunk_builder.rs:96:30
-      16: leafish::tick_all
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:526:9
-      17: leafish::main::{{closure}}
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:437:9
+      14: rustcraft::world::World::get_render_list
+                 at /home/threadexception/IdeaProjects/RustCraft/src/world/mod.rs:584:9
+      15: rustcraft::chunk_builder::ChunkBuilder::tick
+                 at /home/threadexception/IdeaProjects/RustCraft/src/chunk_builder.rs:96:30
+      16: rustcraft::tick_all
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:526:9
+      17: rustcraft::main::{{closure}}
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:437:9
       18: winit::platform_impl::platform::sticky_exit_callback
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/platform_impl/linux/mod.rs:746:5
       19: winit::platform_impl::platform::wayland::event_loop::EventLoop<T>::run_return
@@ -700,8 +756,8 @@ impl World {
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/platform_impl/linux/mod.rs:662:56
       22: winit::event_loop::EventLoop<T>::run
                  at /home/threadexception/.cargo/registry/src/github.com-1ecc6299db9ec823/winit-0.25.0/src/event_loop.rs:154:9
-      23: leafish::main
-                 at /home/threadexception/IdeaProjects/Leafish/src/main.rs:416:5
+      23: rustcraft::main
+                 at /home/threadexception/IdeaProjects/RustCraft/src/main.rs:416:5
       24: core::ops::function::FnOnce::call_once
                  at /rustc/a178d0322ce20e33eac124758e837cbd80a6f633/library/core/src/ops/function.rs:227:5
     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
@@ -909,7 +965,7 @@ impl World {
         skylight: bool,
     ) {
         use crate::protocol::LenPrefixed;
-        use leafish_protocol::types::bit;
+        use rustcraft_protocol::types::bit;
         if self.protocol_version >= 451 {
             let _block_count = data.read_u16::<byteorder::LittleEndian>().unwrap();
             // TODO: use block_count
@@ -1471,6 +1527,18 @@ impl Dimension {
 
     pub fn has_sky_light(&self) -> bool {
         matches!(*self, Dimension::Overworld)
+    }
+
+    /// Human readable name of the dimension.
+    pub fn name(&self) -> String {
+        match self {
+            Dimension::Overworld => "Overworld".to_string(),
+            Dimension::Nether => "The Nether".to_string(),
+            Dimension::End => "The End".to_string(),
+            Dimension::Other(DimensionID::Index(index)) => format!("Dimension {}", index),
+            Dimension::Other(DimensionID::Name(name)) => name.clone(),
+            Dimension::Other(DimensionID::Tag(tag)) => format!("{:?}", tag),
+        }
     }
 }
 

@@ -165,6 +165,17 @@ macro_rules! define_elements {
                 }
             }
 
+            fn get_scale(&self) -> Option<Mode> {
+                match *self {
+                    $(
+                        Element::$name(ref inner) => {
+                            let el = inner.borrow();
+                            el.scale
+                        },
+                    )*
+                }
+            }
+
             fn hover_at(&self, r: &Region, game: &Game, mx: f64, my: f64, sw: f64, sh: f64) -> bool {
                 match *self {
                     $(
@@ -182,6 +193,17 @@ macro_rules! define_elements {
                         Element::$name(ref inner) => {
                             let mut el = inner.borrow_mut();
                             el.click_at(r, game, mx, my, sw, sh)
+                        },
+                    )*
+                }
+            }
+
+            fn drag_at(&self, r: &Region, game: &Game, mx: f64, my: f64, sw: f64, sh: f64) -> bool {
+                match *self {
+                    $(
+                        Element::$name(ref inner) => {
+                            let mut el = inner.borrow_mut();
+                            el.drag_at(r, game, mx, my, sw, sh)
                         },
                     )*
                 }
@@ -268,6 +290,9 @@ const SCREEN: Region = Region {
 
 pub trait ElementHolder {
     fn add(&mut self, el: Element, auto_free: bool);
+    fn get_default_scale(&self) -> Option<Mode> {
+        None
+    }
 }
 
 pub struct Container {
@@ -276,6 +301,7 @@ pub struct Container {
 
     pub mode: Mode,
     last_mode: Mode,
+    pub default_scale: Option<Mode>,
     version: usize,
 
     last_sw: f64,
@@ -298,6 +324,7 @@ impl Container {
 
             mode: Mode::Scaled,
             last_mode: Mode::Scaled,
+            default_scale: None,
             version: 0xFFFF,
 
             last_sw: 0.0,
@@ -351,6 +378,7 @@ impl Container {
             e.tick(renderer.clone());
         }
         for e in &self.elements {
+            let (sw, sh) = Self::element_scale(e, self.mode, width, height);
             let r = Self::compute_draw_region(e, sw, sh, &SCREEN);
             if r.intersects(&SCREEN) {
                 let data = e.draw(renderer.clone(), &r, sw, sh, width, height, delta);
@@ -360,29 +388,23 @@ impl Container {
     }
 
     pub fn hover_at(&mut self, game: &Game, x: f64, y: f64, width: f64, height: f64) {
-        let (sw, sh) = match self.mode {
-            Mode::Scaled => (SCALED_WIDTH / width, SCALED_HEIGHT / height),
-            Mode::Unscaled(scale) => (scale, scale),
-        };
         let mx = (x / width) * SCALED_WIDTH;
         let my = (y / height) * SCALED_HEIGHT;
 
         for e in &self.elements {
+            let (sw, sh) = Self::element_scale(e, self.mode, width, height);
             let r = Self::compute_draw_region(e, sw, sh, &SCREEN);
             e.hover_at(&r, game, mx, my, sw, sh);
         }
     }
 
     pub fn click_at(&mut self, game: &Game, x: f64, y: f64, width: f64, height: f64) {
-        let (sw, sh) = match self.mode {
-            Mode::Scaled => (SCALED_WIDTH / width, SCALED_HEIGHT / height),
-            Mode::Unscaled(scale) => (scale, scale),
-        };
         let mx = (x / width) * SCALED_WIDTH;
         let my = (y / height) * SCALED_HEIGHT;
 
         let mut clicked_element: Option<&Element> = None;
         for e in &self.elements {
+            let (sw, sh) = Self::element_scale(e, self.mode, width, height);
             let r = Self::compute_draw_region(e, sw, sh, &SCREEN);
             if mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h {
                 e.click_at(&r, game, mx, my, sw, sh);
@@ -395,6 +417,27 @@ impl Container {
                 self.clear_focus();
                 e.set_focused(true);
             }
+        }
+    }
+
+    pub fn drag_at(&mut self, game: &Game, x: f64, y: f64, width: f64, height: f64) {
+        let mx = (x / width) * SCALED_WIDTH;
+        let my = (y / height) * SCALED_HEIGHT;
+
+        for e in &self.elements {
+            let (sw, sh) = Self::element_scale(e, self.mode, width, height);
+            let r = Self::compute_draw_region(e, sw, sh, &SCREEN);
+            if mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h {
+                e.drag_at(&r, game, mx, my, sw, sh);
+            }
+        }
+    }
+
+    fn element_scale(el: &Element, default: Mode, width: f64, height: f64) -> (f64, f64) {
+        let mode = el.get_scale().unwrap_or(default);
+        match mode {
+            Mode::Scaled => (SCALED_WIDTH / width, SCALED_HEIGHT / height),
+            Mode::Unscaled(scale) => (scale, scale),
         }
     }
 
@@ -495,6 +538,10 @@ impl ElementHolder for Container {
         self.elements.push(el);
         self.elements.sort_by_key(|v| v.get_draw_index());
     }
+
+    fn get_default_scale(&self) -> Option<Mode> {
+        self.default_scale
+    }
 }
 
 trait UIElement {
@@ -543,12 +590,14 @@ macro_rules! element {
             pub y: f64,
             pub v_attach: VAttach,
             pub h_attach: HAttach,
+            pub scale: Option<Mode>,
             data: Vec<u8>,
             needs_rebuild: bool,
 
             hover_funcs: Vec<Box<dyn Fn(&mut $name, bool, &Game) -> bool>>,
             hover_state: bool,
             click_funcs: Vec<Box<dyn Fn(&mut $name, &Game) -> bool>>,
+            drag_funcs: Vec<Box<dyn Fn(&mut $name, &Game) -> bool>>,
 
             focused: bool,
 
@@ -567,6 +616,10 @@ macro_rules! element {
             fn add(&mut self, el: Element, auto_free: bool) {
                 self.elements.push((auto_free, el));
                 self.elements.sort_by_key(|v| v.1.get_draw_index());
+            }
+
+            fn get_default_scale(&self) -> Option<Mode> {
+                self.scale
             }
         }
 
@@ -688,6 +741,35 @@ macro_rules! element {
                 self.click_funcs.push(Box::new(func));
             }
 
+            fn drag_at(&mut self, super_region: &Region, game: &Game, mx: f64, my: f64, sw: f64, sh: f64) -> bool {
+                use std::mem;
+                let mut handle_self = true;
+                for e in &self.elements {
+                    let r = Container::compute_draw_region(&e.1, sw, sh, &super_region);
+                    if mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h {
+                        if e.1.drag_at(&r, game, mx, my, sw, sh) {
+                            handle_self = false;
+                        }
+                    }
+                }
+                if handle_self {
+                    let len = self.drag_funcs.len();
+                    let mut temp = mem::replace(&mut self.drag_funcs, Vec::with_capacity(len));
+                    let mut block_prop = false;
+                    for func in &temp {
+                        block_prop |= (func)(self, game);
+                    }
+                    self.drag_funcs.append(&mut temp);
+                    block_prop
+                } else {
+                    true // Carry up
+                }
+            }
+
+            pub fn add_drag_func<F: Fn(&mut $name, &Game) -> bool + 'static>(&mut self, func: F) {
+                self.drag_funcs.push(Box::new(func));
+            }
+
             pub fn make_focusable(this: &$nameref, container: &mut Container) {
                 container.add_focusable(WeakElement::$name(Rc::downgrade(&this)));
             }
@@ -710,6 +792,7 @@ macro_rules! element {
             y: Option<f64>,
             v_attach: Option<VAttach>,
             h_attach: Option<HAttach>,
+            scale: Option<Mode>,
         }
 
         impl $builder {
@@ -729,6 +812,11 @@ macro_rules! element {
             // Base fields
             pub fn draw_index(mut self, draw_index: isize) -> Self {
                 self.draw_index = draw_index;
+                self
+            }
+
+            pub fn scale(mut self, scale: Mode) -> Self {
+                self.scale = Some(scale);
                 self
             }
 
@@ -760,6 +848,7 @@ macro_rules! element {
                     y: None,
                     v_attach: None,
                     h_attach: None,
+                    scale: None,
                 }
             }
 
@@ -795,6 +884,7 @@ macro_rules! element {
                     y: self.y.unwrap_or(0.0),
                     v_attach: self.v_attach.unwrap_or(VAttach::Top),
                     h_attach: self.h_attach.unwrap_or(HAttach::Left),
+                    scale: self.scale.or_else(|| ui.get_default_scale()),
                     last_x: self.x.unwrap_or(0.0),
                     last_y: self.y.unwrap_or(0.0),
                     last_v_attach: self.v_attach.unwrap_or(VAttach::Top),
@@ -807,6 +897,7 @@ macro_rules! element {
                     hover_funcs: vec![],
                     hover_state: false,
                     click_funcs: vec![],
+                    drag_funcs: vec![],
 
                     focused: false,
                 }));
@@ -827,11 +918,13 @@ element! {
         pub colour: (u8, u8, u8, u8),
         pub texture_coords: (f64, f64, f64, f64),
         priv last_texture: String,
+        priv last_texture_version: usize,
         priv last_colour: (u8, u8, u8, u8),
         priv last_texture_coords: (f64, f64, f64, f64),
     }
     builder ImageBuilder {
         hardcode last_texture = "".into(),
+        hardcode last_texture_version = 0,
         hardcode last_colour = (0, 0, 0, 0),
         hardcode last_texture_coords = (0.0, 0.0, 0.0, 0.0),
         simple texture: String,
@@ -861,9 +954,9 @@ impl UIElement for Image {
         height: f64,
         delta: f64,
     ) -> &mut [u8] {
-        if self.check_rebuild() {
+        let texture = render::Renderer::get_texture(renderer.get_textures_ref(), &self.texture);
+        if self.check_rebuild() || self.last_texture_version != texture.version() {
             self.data.clear();
-            let texture = render::Renderer::get_texture(renderer.get_textures_ref(), &self.texture);
             let mut element = render::ui::UIElement::new(
                 &texture,
                 r.x,
@@ -881,6 +974,7 @@ impl UIElement for Image {
             element.a = self.colour.3;
             self.data.extend_from_slice(&element.bytes(width, height));
             self.super_draw(renderer, r, sw, sh, width, height, delta);
+            self.last_texture_version = texture.version();
             self.last_texture.clone_from(&self.texture);
             self.last_colour = self.colour;
             self.last_texture_coords = self.texture_coords;
@@ -1352,8 +1446,8 @@ impl UIElement for Button {
                     &texture,
                     r.x,
                     r.y,
-                    4.0 * sw,
-                    4.0 * sh,
+                    6.0 * sw,
+                    6.0 * sh,
                     0.0,
                     0.0,
                     2.0 / 200.0,
@@ -1364,10 +1458,10 @@ impl UIElement for Button {
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture,
-                    r.x + r.w - 4.0 * sw,
+                    r.x + r.w - 6.0 * sw,
                     r.y,
-                    4.0 * sw,
-                    4.0 * sh,
+                    6.0 * sw,
+                    6.0 * sh,
                     198.0 / 200.0,
                     0.0,
                     2.0 / 200.0,
@@ -1379,9 +1473,9 @@ impl UIElement for Button {
                 render::ui::UIElement::new(
                     &texture,
                     r.x,
-                    r.y + r.h - 6.0 * sh,
-                    4.0 * sw,
-                    6.0 * sh,
+                    r.y + r.h - 9.0 * sh,
+                    6.0 * sw,
+                    9.0 * sh,
                     0.0,
                     17.0 / 20.0,
                     2.0 / 200.0,
@@ -1392,10 +1486,10 @@ impl UIElement for Button {
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture,
-                    r.x + r.w - 4.0 * sw,
-                    r.y + r.h - 6.0 * sh,
-                    4.0 * sw,
-                    6.0 * sh,
+                    r.x + r.w - 6.0 * sw,
+                    r.y + r.h - 9.0 * sh,
+                    6.0 * sw,
+                    9.0 * sh,
                     198.0 / 200.0,
                     17.0 / 20.0,
                     2.0 / 200.0,
@@ -1404,14 +1498,14 @@ impl UIElement for Button {
                 .bytes(width, height),
             );
 
-            let w = ((r.w / sw) / 2.0) - 4.0;
+            let w = ((r.w / sw) / 2.0) - 6.0;
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture.relative(2.0 / 200.0, 0.0, 196.0 / 200.0, 2.0 / 20.0),
-                    r.x + 4.0 * sw,
+                    r.x + 6.0 * sw,
                     r.y,
-                    r.w - 8.0 * sw,
-                    4.0 * sh,
+                    r.w - 12.0 * sw,
+                    6.0 * sh,
                     0.0,
                     0.0,
                     w / 196.0,
@@ -1422,10 +1516,10 @@ impl UIElement for Button {
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture.relative(2.0 / 200.0, 17.0 / 20.0, 196.0 / 200.0, 3.0 / 20.0),
-                    r.x + 4.0 * sw,
-                    r.y + r.h - 6.0 * sh,
-                    r.w - 8.0 * sw,
-                    6.0 * sh,
+                    r.x + 6.0 * sw,
+                    r.y + r.h - 9.0 * sh,
+                    r.w - 12.0 * sw,
+                    9.0 * sh,
                     0.0,
                     0.0,
                     w / 196.0,
@@ -1434,14 +1528,14 @@ impl UIElement for Button {
                 .bytes(width, height),
             );
 
-            let h = ((r.h / sh) / 2.0) - 5.0;
+            let h = ((r.h / sh) / 2.0) - 7.5;
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture.relative(0.0 / 200.0, 2.0 / 20.0, 2.0 / 200.0, 15.0 / 20.0),
                     r.x,
-                    r.y + 4.0 * sh,
-                    4.0 * sw,
-                    r.h - 10.0 * sh,
+                    r.y + 6.0 * sh,
+                    6.0 * sw,
+                    r.h - 15.0 * sh,
                     0.0,
                     0.0,
                     1.0,
@@ -1452,10 +1546,10 @@ impl UIElement for Button {
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture.relative(198.0 / 200.0, 2.0 / 20.0, 2.0 / 200.0, 15.0 / 20.0),
-                    r.x + r.w - 4.0 * sw,
-                    r.y + 4.0 * sh,
-                    4.0 * sw,
-                    r.h - 10.0 * sh,
+                    r.x + r.w - 6.0 * sw,
+                    r.y + 6.0 * sh,
+                    6.0 * sw,
+                    r.h - 15.0 * sh,
                     0.0,
                     0.0,
                     1.0,
@@ -1467,10 +1561,10 @@ impl UIElement for Button {
             self.data.extend(
                 render::ui::UIElement::new(
                     &texture.relative(2.0 / 200.0, 2.0 / 20.0, 196.0 / 200.0, 15.0 / 20.0),
-                    r.x + 4.0 * sw,
-                    r.y + 4.0 * sh,
-                    r.w - 8.0 * sw,
-                    r.h - 10.0 * sh,
+                    r.x + 6.0 * sw,
+                    r.y + 6.0 * sh,
+                    r.w - 12.0 * sw,
+                    r.h - 15.0 * sh,
                     0.0,
                     0.0,
                     w / 196.0,

@@ -9,4 +9,4 @@ pub mod protocol;
 pub mod translate;
 pub mod types;
 
-use leafish_shared as shared;
+use rustcraft_shared as shared;
