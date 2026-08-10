@@ -33,6 +33,8 @@ Uses a multi-protocol system to allow connection to various Minecraft versions.
 
 ## Feature Progress
 
+![Progress](https://img.shields.io/badge/Progress-11%2F161%20(6.8%25)-blue?style=for-the-badge)
+
 ### Major Features
 
 | Feature | Status | Notes |
